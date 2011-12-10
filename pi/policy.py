@@ -554,6 +554,7 @@ class TriggerPolicyImpl(ConnectablePolicyImpl):
     def get_clock(self):
         return self.__clock
 
+<<<<<<< HEAD
     def prepare_plumber(self,plumber):
         if plumber.connect_static():
             if self.__ctrl is None:
@@ -571,6 +572,22 @@ class TriggerPolicyImpl(ConnectablePolicyImpl):
 
     def create_plumber(self,config):
         return Plumber(self,config)
+=======
+    def create_controller(self):
+        return TriggerFunctorController(self.__clock_domain,self.__stream_policy,self.__handler)
+
+    def create_plumber(self,init,address,filter,slot,clocked):
+        if init:
+            self.__backend = piw.functor_backend(1,True)
+            self.__backend.set_functor(piw.pathnull(0),self.__handler)
+            self.__backend.send_duplicates(True)
+            self.__correlator = piw.correlator(self.__clock_domain,chr(1),piw.root_filter(),self.__backend.cookie(),0,0)
+
+        if clocked:
+            self.__set_clock(self.__backend.get_clock())
+
+        return Plumber(self.__correlator,1,slot,-1,Plumber.input_input,self.__stream_policy,address,filter,clocked,None)
+>>>>>>> upstream/1.4
 
     def __set_clock(self,clock):
         if self.__upstream is not None:
