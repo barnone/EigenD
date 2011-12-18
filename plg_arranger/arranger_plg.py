@@ -126,6 +126,7 @@ class EventList(node.Server):
         node.Server.__init__(self,creator=self.__create)
         self.__setter = piw.fastchange(self.__agent.model.set_event())
         self.__agent.model.event_set(piw.make_change_nb(utils.slowchange(self.model_changed)))
+        self.__agent.model.events_cleared(piw.make_change_nb(utils.slowchange(self.model_cleared)))
 
     def __create(self,k):
         return Event(self)
@@ -135,8 +136,13 @@ class EventList(node.Server):
             e = self.__encode(d.as_string())
             self.__setter(e)
 
+    def model_cleared(self,d):
+        for k,v in self.items():
+            del self[k]
+
     def model_changed(self,d):
         r,c,e = self.__decode(d)
+        print 'model changed',d,r,c,e
         if e is not None:
             self.__setup(r,c,e)
         else:
@@ -196,7 +202,7 @@ class EventList(node.Server):
 class Parameters(atom.Atom):
     def __init__(self,agent):
         self.__agent = agent
-        atom.Atom.__init__(self)
+        atom.Atom.__init__(self,names='parameters')
 
         self[1] = atom.Atom(domain=domain.BoundedInt(1,10000),names='beginning',policy=atom.default_policy(self.__start_change),container=(None,'loopstart',self.__agent.verb_container()),protocols='set')
         self[1].add_verb2(1,'set([],~a,role(None,[instance(~self)]),role(to,[numeric]))',create_action=self.__start_create,clock=True)
@@ -319,7 +325,7 @@ class Agent(agent.Agent):
         self[2] = atom.Atom(domain=domain.Aniso(),policy=self.ctlr_input.policy(1,False),names='controller input')
 
         self.kinput = bundles.VectorInput(self.view.cookie(),self.domain,signals=(1,2,3,5))
-        self[3] = atom.Atom()
+        self[3] = atom.Atom(names='key inputs')
         self[3][1] = atom.Atom(domain=domain.BoundedFloat(0,1),policy=self.kinput.vector_policy(1,False),names='pressure input',protocols='nostage')
         self[3][2] = atom.Atom(domain=domain.BoundedFloat(-1,1),policy=self.kinput.merge_policy(2,False),names='roll input',protocols='nostage')
         self[3][3] = atom.Atom(domain=domain.BoundedFloat(-1,1),policy=self.kinput.merge_policy(3,False),names='yaw input',protocols='nostage')
@@ -328,7 +334,7 @@ class Agent(agent.Agent):
 
         self.cinput = bundles.ScalarInput(self.model.cookie(),self.domain,signals=(1,2))
         self.cinput.add_upstream(self.verb_container().clock)
-        self[4] = atom.Atom()
+        self[4] = atom.Atom(names='metronome inputs')
         self[4][1] = atom.Atom(domain=domain.Aniso(), policy=self.cinput.nodefault_policy(1,False),names='song beat input')
         self[4][2] = atom.Atom(domain=domain.Aniso(), policy=self.cinput.nodefault_policy(2,False),names='running input')
 

@@ -146,17 +146,20 @@ class Event(talker.Talker):
         self.index = index
         self.event = piw.event(scheduler.scheduler,False,utils.changify(self.__enable_changed))
 
-        talker.Talker.__init__(self,scheduler.finder,self.event.fastdata(),None,names='event',ordinal=index,protocols='remove')
+        self.key_mapper = piw.function1(True,2,2,piw.data(),scheduler.light_aggregator.get_output(index+1))
+        self.key_mapper.set_functor(piw.d2d_const(utils.maketuple_longs((0,self.index),0)))
+
+        talker.Talker.__init__(self,scheduler.finder,self.event.fastdata(),self.key_mapper.cookie(),names='event',ordinal=index,protocols='remove')
 
         self[3] = atom.Atom(domain=domain.String(), policy=atom.default_policy(self.__change_schema), names='schema')
         self[4] = atom.Atom(domain=domain.Bool(), init=False, policy=atom.default_policy(self.__change_enabled), names='enabled')
 
     def ordinal(self):
-        return self.event.ordinal()
+        return self.index
 
     def describe(self):
         o = self.ordinal()+1
-        d = describe_schema(self[3].get_value())
+        d = describe_schema(self.get_schema())
         return '%s' %  d
 
     def get_schema(self):
@@ -181,6 +184,7 @@ class Event(talker.Talker):
                 self.event.enable()
                 self.event.event_enable()
             self.event.attach(self.scheduler.controller)
+            self.event.set_key(utils.maketuple((piw.makelong(0,0),piw.makelong(self.index,0)), 0))
             self[3].set_value(schema)
             print 'enabling event',id(self.event),'for',s
 
@@ -196,13 +200,15 @@ class Event(talker.Talker):
             self.event.enable()
             self.event.event_enable()
             self.event.attach(self.scheduler.controller)
-            self[3].set_value(schema)
+            self.event.set_key(utils.maketuple((piw.makelong(0,0),piw.makelong(self.index,0)), 0))
+            self[3].set_value(schema.as_string())
             print 'enabling event',id(self.event),'for',s
 
     def cancel(self):
         print 'canceling event',id(self.event)
         self.event.detach()
         self.event.disable()
+        self.scheduler.light_aggregator.clear_output(self.index+1)
         return self.clear_phrase()
 
     def __enable_changed(self,d):
@@ -249,12 +255,13 @@ class Agent(agent.Agent):
 
         self[4] = atom.Atom(names='controller')
         self[4][1] = bundles.Output(1,False, names='light output',protocols='revconnect')
-        self.control_output = bundles.Splitter(self.domain,self[4][1])
-        self.light_convertor = piw.lightconvertor(self.control_output.cookie())
-        self.controller = piw.controller(self.light_convertor.cookie(),utils.pack_str(1))
-        self.control_input = bundles.VectorInput(self.controller.event_cookie(), self.domain, signals=(1,))
-
-        self[4][2] = atom.Atom(domain=domain.BoundedFloat(0,1), policy=self.control_input.local_policy(1,False),names='activation input',protocols='nostage')
+        self.light_output = bundles.Splitter(self.domain,self[4][1])
+        self.light_convertor = piw.lightconvertor(self.light_output.cookie())
+        self.light_aggregator = piw.aggregator(self.light_convertor.cookie(),self.domain)
+        self.controller = piw.controller(self.light_aggregator.get_output(1),utils.pack_str(1,2))
+        self.activation_input = bundles.VectorInput(self.controller.event_cookie(), self.domain,signals=(1,2))
+        self[4][2] = atom.Atom(domain=domain.Aniso(),policy=self.activation_input.merge_nodefault_policy(2,False),names='controller input',protocols='nostage')
+        self[4][3] = atom.Atom(domain=domain.Aniso(),policy=self.activation_input.local_policy(1,False), names='key input',protocols='nostage')
 
         self[5] = EventBrowser(self.__eventlist)
 

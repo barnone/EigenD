@@ -239,7 +239,7 @@ class Output(atom.Atom):
         self.__slot = slot
         self.__tee = None
 
-        atom.Atom.__init__(self,domain=domain.Bool(),init=False,policy=atom.default_policy(self.enable),names='kgroup output',protocols='remove',ordinal=slot,container=const.verb_node)
+        atom.Atom.__init__(self,names='kgroup output',protocols='remove',ordinal=slot,container=const.verb_node)
 
         self.light_output = piw.clone(True)
         self.light_input = bundles.VectorInput(self.light_output.cookie(),self.__agent.domain,signals=(1,))
@@ -263,6 +263,7 @@ class Output(atom.Atom):
 
         self[20] = VirtualKey(self.__agent.kgroup_size,self.__agent.key_choice)
 
+        self[23] = atom.Atom(domain=domain.Bool(),init=False,policy=atom.default_policy(self.enable),names='enable')
         self[24] = atom.Atom(domain=domain.BoundedInt(-32767,32767), names='key row', init=None, policy=atom.default_policy(self.__change_key_row))
         self[25] = atom.Atom(domain=domain.BoundedInt(-32767,32767), names='key column', init=None, policy=atom.default_policy(self.__change_key_column))
 
@@ -289,7 +290,7 @@ class Output(atom.Atom):
         return False
 
     def __setstate(self,data):
-        self.set_value(data.as_norm()!=0.0)
+        self[23].set_value(data.as_norm()!=0.0)
 
     def enable(self,val):
         self.__agent.mode_selector.select(self.__slot,val)
@@ -325,7 +326,7 @@ class Output(atom.Atom):
         self.light_output.set_output(1,self.__agent.light_switch.get_input(n))
 
         self.__agent.mode_selector.gate_output(n,tee,utils.make_change_nb(piw.slowchange(utils.changify(self.__setstate))))
-        self.__agent.mode_selector.select(n,self.get_value())
+        self.__agent.mode_selector.select(n,self[23].get_value())
 
     def unplumb(self):
         if self.__tee is not None:
@@ -383,6 +384,7 @@ class OutputList(atom.Atom):
         for k,v in self.items():
             if n == k:
                 oid = v.id()
+                v.notify_destroy()
                 del self[k]
                 self.__check_single()
                 return oid
@@ -400,7 +402,7 @@ class OutputList(atom.Atom):
         for v in self.values():
             v.enable(False)
             v.plumb()
-            v.enable(v.get_value())
+            v.enable(v[23].get_value())
 
         self.__plumbing = True
         self.__check_single()
@@ -414,7 +416,8 @@ class OutputList(atom.Atom):
             if output:
                 return output
 
-        slot = self.find_hole()
+        if slot is None:
+            slot = self.find_hole()
 
         output = Output(self,slot)
         output.plumb()
@@ -426,7 +429,7 @@ class OutputList(atom.Atom):
 
     def output_selector(self,v):
         if v.is_tuple():
-            keynum = v.as_tuple_value(2).as_long()
+            keynum = v.as_tuple_value(0).as_long()
             row = int(v.as_tuple_value(1).as_tuple_value(0).as_float())
             col = int(v.as_tuple_value(1).as_tuple_value(1).as_float())
             for k,o in self.items():
@@ -451,6 +454,7 @@ class OutputList(atom.Atom):
     def uncreate(self,oid):
         for k,v in self.items():
             if v.id()==oid:
+                v.notify_destroy()
                 del self[k]
                 self.__check_single()
                 return True
@@ -496,9 +500,6 @@ class Agent(agent.Agent):
         self.status_mapper = piw.function1(False,1,1,piw.makenull(0),self.lights.cookie())
         self.status_mapper.set_functor(self.mapper.light_filter())
         self.light_switch = piw.multiplexer(self.status_mapper.cookie(),self.domain)
-
-        self[34] = bundles.Output(1,False,names='selection output')
-        self.outputselection = bundles.Splitter(self.domain,self[34])
 
         self.kclone = piw.clone(False) # keys
         self.s1clone = piw.clone(False) # strip 1
@@ -555,7 +556,7 @@ class Agent(agent.Agent):
         self.status_buffer.autosend(False)
         lightselection = self.status_buffer.enabler()
         modeselection = utils.make_change_nb(piw.slowchange(utils.changify(self.__mode_selection)))
-        self.mode_selector = piw.selector(self.light_switch.get_input(250),self.outputselection.cookie(),lightselection,modeselection,250,False)
+        self.mode_selector = piw.selector(self.light_switch.get_input(250),lightselection,modeselection,250,False)
 
         self.modepulse = piw.changelist_nb()
         piw.changelist_connect_nb(self.modepulse,self.status_buffer.blinker())
@@ -566,9 +567,6 @@ class Agent(agent.Agent):
         self[25] = atom.Atom(domain=domain.BoundedInt(-32767,32767), names='mode key column', init=None, policy=atom.default_policy(self.__change_mode_key_column))
         self[26] = atom.Atom(domain=domain.String(), init='[]', names='key map', policy=atom.default_policy(self.__set_members))
         self[28] = atom.Atom(domain=domain.String(), init='[]', names='course size', policy=atom.default_policy(self.__set_course_size))
-
-        self[27] = atom.Atom(domain=domain.Aniso(), names='selection input', policy=policy.FastPolicy(self.mode_selector.gate_selection_input(),policy.AnisoStreamPolicy()))
-
 
         self.add_verb2(3,'set([un],None)',callback=self.__untune)
 
@@ -611,6 +609,8 @@ class Agent(agent.Agent):
 
         self[1] = OutputList(self)
         self.outputchoice = utils.make_change_nb(piw.slowchange(utils.changify(self[1].output_selector)))
+
+        self[29] = atom.Atom(domain=domain.String(),init='',policy=atom.default_policy(self.__choose_flag),names='chooser')
 
     def __is_mode_key(self,d):
         row = self[24].get_value()
@@ -732,6 +732,7 @@ class Agent(agent.Agent):
         size = self.__decode(k)
         self.__upstream_size = size
         self.status_buffer.set_blink_size(size)
+        self.status_mapper.set_functor(self.mapper.light_filter())
 
     def __set_course_semi(self,subject,course,interval):
         (typ,id) = action.crack_ideal(action.arg_objects(course)[0])
@@ -900,6 +901,10 @@ class Agent(agent.Agent):
         self.__setkeys(coursekeys)
 
     def __choose(self,subject,dummy,course):
+        c = int(action.abstract_string(course)) if course else None
+        self.__choose_base(c)
+
+    def __choose_base(self,course):
         print 'start choosing..',self.__upstream_size
         self.__choices = []
         self.__course=1
@@ -914,7 +919,7 @@ class Agent(agent.Agent):
         coursekeys=[]
 
         if course:
-            self.__course = int(action.abstract_string(course))
+            self.__course = course
         else:
             # collapse current courses into 1 course
             self.__course=1
@@ -934,17 +939,31 @@ class Agent(agent.Agent):
         for k in range(1,self.__upstream_size+1):
             if k in active:
                 if k in self.__coursekeys:
-                    self.status_buffer.set_status(k,const.status_choose_active)
+                    self.status_buffer.set_status(0,k,const.status_choose_active)
                 else:
-                    self.status_buffer.set_status(k,const.status_choose_used)
+                    self.status_buffer.set_status(0,k,const.status_choose_used)
             else:
-                self.status_buffer.set_status(k,const.status_choose_available)
+                self.status_buffer.set_status(0,k,const.status_choose_available)
 
         self.status_buffer.send()
 
         self.status_buffer.override(True)
         self.mode_selector.choose(True)
         piw.changelist_connect_nb(self.keypulse,self.keychoice)
+
+        self[29].set_value(self.__course)
+
+    def __choose_flag(self,v):
+        if v:
+            try:
+                v=int(v)
+                if v:
+                    self.__choose_base(v)
+                    return
+            except:
+                pass
+
+        self.__unchoose(None)
 
     def __choice(self,v):
         if not v.is_tuple() or v.as_tuplelen() != 4: return
@@ -955,19 +974,22 @@ class Agent(agent.Agent):
             piw.changelist_disconnect_nb(self.keypulse,self.keychoice)
             self.status_buffer.override(False)
             self.__do_mapping()
-        else:
-            if not keynum in self.__choices:
-                self.__choices.append(keynum)
-                for k in self.__coursekeys:
-                    self.status_buffer.set_status(k,const.status_choose_used)
-                self.__coursekeys=[]
-                self.status_buffer.set_status(keynum,const.status_choose_active)
-                self.status_buffer.send()
+            self[29].set_value(None)
+            return
+
+        if not keynum in self.__choices:
+            self.__choices.append(keynum)
+            for k in self.__coursekeys:
+                self.status_buffer.set_status(0,k,const.status_choose_used)
+            self.__coursekeys=[]
+            self.status_buffer.set_status(0,keynum,const.status_choose_active)
+            self.status_buffer.send()
         
     def __unchoose(self,subject):
         self.mode_selector.choose(False)
         piw.changelist_disconnect_nb(self.keypulse,self.keychoice)
         self.status_buffer.override(False)
+        self[29].set_value(None)
         
     def __do_mapping(self):
         self.controller.ensure(self.__course)
