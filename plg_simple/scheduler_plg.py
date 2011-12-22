@@ -256,12 +256,12 @@ class Agent(agent.Agent):
         self[4] = atom.Atom(names='controller')
         self[4][1] = bundles.Output(1,False, names='light output',protocols='revconnect')
         self.light_output = bundles.Splitter(self.domain,self[4][1])
-        self.light_convertor = piw.lightconvertor(self.light_output.cookie())
+        self.light_convertor = piw.lightconvertor(False,self.light_output.cookie())
         self.light_aggregator = piw.aggregator(self.light_convertor.cookie(),self.domain)
         self.controller = piw.controller(self.light_aggregator.get_output(1),utils.pack_str(1,2))
         self.activation_input = bundles.VectorInput(self.controller.event_cookie(), self.domain,signals=(1,2))
         self[4][2] = atom.Atom(domain=domain.Aniso(),policy=self.activation_input.merge_nodefault_policy(2,False),names='controller input',protocols='nostage')
-        self[4][3] = atom.Atom(domain=domain.Aniso(),policy=self.activation_input.local_policy(1,False), names='key input',protocols='nostage')
+        self[4][3] = atom.Atom(domain=domain.Aniso(),policy=self.activation_input.vector_policy(1,False), names='key input',protocols='nostage')
 
         self[5] = EventBrowser(self.__eventlist)
 
@@ -271,11 +271,12 @@ class Agent(agent.Agent):
     def rpc_delete_trigger(self,args):
         trigger = action.unmarshal(args)
         for (i,e) in self[3].iteritems():
-            if e.trigger_id()==id:
-                print 'deleting event',id
+            if e.trigger_id()==trigger:
+                print 'deleting event',e.trigger_id()
                 e.cancel()
                 del self[3][i]
                 self[5].update()
+                return
 
     def __create_event(self,schema,called=None):
         if called:

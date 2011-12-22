@@ -233,8 +233,9 @@ class PluginState(node.server):
         self[6] = PluginStateBlob()
         self.__state_loaded = False
 
+    @async.coroutine('internal error')
     def load_state(self,state,delegate,phase):
-        node.server.load_state(self,state,delegate,phase)
+        yield node.server.load_state(self,state,delegate,phase)
         self.__state_loaded = True
 
     def apply_state(self):
@@ -574,6 +575,7 @@ class Agent(agent.Agent):
 
     def agent_postload(self,filename):
         self.__state.apply_state()
+        agent.Agent.agent_postload(self,filename)
 
     def agent_presave(self,filename):
         state = self.__host.get_state()

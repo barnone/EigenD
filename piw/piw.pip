@@ -251,14 +251,21 @@ class correlator[piw::correlator_t] /gc/
     void kill()
 }
 
+class backend[piw::backend_t]
+{
+    backend(correlator *, unsigned, unsigned, int, unsigned,bool)
+    virtual converter_ref create_converter(bool) = 0
+    void set_clocked(bool)
+    void set_latency(unsigned)
+    void remove_latency()
+}
+
 class connector[piw::connector_t]: client /gc/
 {
-    connector(correlator *, unsigned, unsigned, int, unsigned,const d2d_nb &,bool)
-    virtual converter_ref create_converter() = 0
+    connector(bool, backend *,backend *, const d2d_nb &, bool);
     void client_opened()
     void client_clock()
     void close_client()
-    void set_clocked(bool)
 }
 
 class converter_ref[piw::converter_ref_t]
@@ -465,7 +472,7 @@ class ranger[piw::ranger_t]
 
 class lightconvertor[piw::lightconvertor_t]
 {
-    lightconvertor(const cookie &)
+    lightconvertor(bool, const cookie &)
     cookie cookie()
     void set_status_handler(unsigned, int, int, change)
     void remove_status_handler(unsigned)
@@ -480,8 +487,8 @@ class statusbuffer[piw::statusbuffer_t] /gc/
     void override(bool)
     void autosend(bool)
     void clear()
-    void set_status(int,int,unsigned char)
-    unsigned char get_status(int,int)
+    void set_status(bool,int,int,unsigned char)
+    unsigned char get_status(bool,int,int)
     void set_blink_time(float)
     void set_blink_size(unsigned)
     change_nb enabler()
@@ -1903,7 +1910,7 @@ class scaler_controller[piw::scaler_controller_t]
 
 class scaler[piw::scaler_t] /gc/
 {
-    scaler(scaler_controller *,const cookie &,const f2f &)
+    scaler(scaler_controller *,const cookie &,const cookie &,const f2f &)
     cookie cookie()
     void set_bend_curve(const f2f &);
 }

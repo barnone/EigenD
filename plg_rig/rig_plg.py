@@ -6,6 +6,61 @@ from plg_rig import rig_version as version
 import rig_native
 import os
 
+def name_subst(name,find,repl):
+    oname = []
+    for w in name.split():
+        if w == find: w = repl
+        oname.append(w)
+    return ' '.join(oname)
+
+class DataProxy(node.Client):
+    def __init__(self,handler):
+        self.__handler = handler
+        node.Client.__init__(self)
+
+    def client_opened(self):
+        node.Client.client_opened(self)
+        self.__handler(self.get_data())
+
+    def close_client(self):
+        node.Client.close_client(self)
+
+    def client_data(self,v):
+        self.__handler(v)
+
+class RigMonitor(proxy.AtomProxy):
+
+    monitor = set(['latency','domain'])
+
+    def __init__(self,input,address):
+        proxy.AtomProxy.__init__(self)
+        self.__input = input
+        self.__connector = None
+        self.__mainanchor = piw.canchor()
+        self.__mainanchor.set_client(self)
+        self.__mainanchor.set_address_str(address)
+
+    def disconnect(self):
+        self.__connector = None
+        self.set_data_clone(self.__connector)
+        self.__mainanchor.set_address_str('')
+
+    def node_ready(self):
+        self.__input.add_monitor(self)
+        self.__connector = DataProxy(self.__input.handler)
+        self.set_data_clone(self.__connector)
+
+    def node_removed(self):
+        self.__input.del_monitor(self)
+        self.set_data_clone(None)
+        self.__connector = None
+
+    def node_changed(self,parts):
+        if 'domain' in parts:
+            self.node_removed()
+            self.node_ready()
+            return
+
 class RigOutputPolicyImpl:
     protocols = 'output'
 
@@ -33,15 +88,18 @@ class RigOutputPolicyImpl:
     def close(self):
         pass
 
+
 def RigOutputPolicy(*args,**kwds):
     return policy.PolicyFactory(RigOutputPolicyImpl,*args,**kwds)
 
 class RigOutput(atom.Atom):
-    def __init__(self,master,ordinal):
+    def __init__(self,master,ordinal,scope):
         atom.Atom.__init__(self,ordinal=ordinal,policy=RigOutputPolicy(),protocols='remove')
 
         self.__inputs = {}
         self.__master = master
+        self.__monitors = {}
+        self.__scope = scope
 
         self.__clockdom = piw.clockdomain_ctl()
         self.__clockdom.set_source(piw.makestring('*',0))
@@ -58,11 +116,40 @@ class RigOutput(atom.Atom):
     def set_names(self,value):
         self.__master.set_names(value)
 
+    def property_change(self,key,value):
+        if key != 'slave':
+            return
+
+        cur_slaves = set(self.get_property_termlist('slave'))
+        old_slaves = set(self.__monitors.keys())
+
+        dead_slaves = old_slaves.difference(cur_slaves)
+        new_slaves = cur_slaves.difference(old_slaves)
+
+        for s in dead_slaves:
+            m = self.__monitors[s]
+            del self.__monitors[s]
+            m.disconnect()
+
+        for s in new_slaves:
+            id=paths.to_absolute(s,self.__scope)
+            m = RigMonitor(self.__master,id)
+            self.__monitors[s] = m
+
+
     def property_veto(self,key,value):
         if atom.Atom.property_veto(self,key,value):
             return True
 
         return key in ['name','ordinal']
+
+    def plumb_clocks(self):
+        for v in self.__inputs.values():
+            v.set_downstream(self.__clock)
+
+    def unplumb_clocks(self):
+        for v in self.__inputs.values():
+            v.clear_downstream()
 
     def set_domain(self,dom):
         self.unplumb_clocks()
@@ -97,14 +184,6 @@ class RigOutput(atom.Atom):
 
         self.set_domain(domain.Aniso())
 
-    def plumb_clocks(self):
-        for v in self.__inputs.values():
-            v.set_downstream(self.__clock)
-
-    def unplumb_clocks(self):
-        for v in self.__inputs.values():
-            v.clear_downstream()
-
     def add_input(self,iid,inp):
         if iid in self.__inputs:
             self.__inputs[iid].clear_downstream()
@@ -118,16 +197,18 @@ class RigOutput(atom.Atom):
             del self.__inputs[iid]
             self.__setup()
 
+
 class RigInputPlumber(proxy.AtomProxy):
 
     monitor = set(['latency','domain'])
 
-    def __init__(self,output,iid,address,filt):
+    def __init__(self,output,iid,address,filt,ctl):
         proxy.AtomProxy.__init__(self)
         self.__output = output
         self.__iid = iid
         self.__filt = filt
         self.__connector = None
+        self.__ctl = ctl
         self.__mainanchor = piw.canchor()
         self.__mainanchor.set_client(self)
         self.__mainanchor.set_address_str(address)
@@ -139,7 +220,7 @@ class RigInputPlumber(proxy.AtomProxy):
 
     def node_ready(self):
         self.__output.add_input(self.__iid,self)
-        self.__connector = rig_native.connector(self.__output.get_policy().data_node(),self.__iid,self.__filt)
+        self.__connector = rig_native.connector(self.__ctl,self.__output.get_policy().data_node(),self.__iid,self.__filt)
         self.set_data_clone(self.__connector)
 
     def node_removed(self):
@@ -163,6 +244,9 @@ class RigInputPolicyImpl:
         self.__data_domain = data_domain
         self.__connection_iids = set()
         self.__output = output
+        self.__clockdom = piw.clockdomain_ctl()
+        self.__clockdom.set_source(piw.makestring('*',0))
+        self.__ctrl = None
         atom.set_property_string('domain',str(data_domain))
         self.__connections = container.PersistentMetaData(atom,'master',asserted=self.__add_connection, retracted=self.__del_connection)
 
@@ -179,13 +263,13 @@ class RigInputPolicyImpl:
         self.data_node.set_data(d)
 
     def change_value(self,v,t=0,p=False):
-        pass
+        self.set_data(v)
 
     def set_value(self,v,t=0):
-        pass
+        self.set_data(v)
 
     def get_value(self):
-        return None
+        return self.get_data()
 
     def closed(self):
         return self.__closed
@@ -205,28 +289,35 @@ class RigInputPolicyImpl:
             id=paths.to_absolute(stream.args[2],self.__scope)
             path=stream.args[3]
 
-            if path is not None:
-                return (id,piw.signal_dsc_filter(using,tgt,path))
-            else:
-                return (id,piw.signal_cnc_filter(using,tgt))
+            ctl=True if stream.args[4] == 'ctl' else False
 
-        print 'cop out of',stream
-        return ('',piw.null_filter())
+            if path is not None:
+                return (id,piw.signal_dsc_filter(using,tgt,path),ctl)
+            else:
+                return (id,piw.signal_cnc_filter(using,tgt),ctl)
+
+        return ('',piw.null_filter(),False)
 
     def close(self):
         self.__closed = True
         self.__connections.clear()
 
+    def get_backend(self,config):
+        backend=self.__ctrl.get_backend(config)
+        return backend,backend
+
     def __add_connection(self,src):
         iid = (max(self.__connection_iids)+1 if self.__connection_iids else 1)
 
-        (a,f) = self.make_filter(src,iid)
+        (a,f,c) = self.make_filter(src,iid)
 
         if not paths.valid_id(a):
             return None
 
         self.__connection_iids.add(iid)
-        return policy.PlumberSlot(iid,src,None,RigInputPlumber(self.__output,iid,a,f))
+
+        plumber = RigInputPlumber(self.__output,iid,a,f,c)
+        return policy.PlumberSlot(iid,src,None,plumber)
 
     def __del_connection(self,src,slot,destroy):
         self.__connection_iids.discard(slot.iid)
@@ -238,31 +329,73 @@ def RigInputPolicy(*args,**kwds):
 
 
 class RigInput(atom.Atom):
-    def __init__(self,scope,peer,index):
-        self.__peer = peer
+    def __init__(self,scope,index,output_peer):
+        self.__output_peer = output_peer
         self.__index = index
         self.__scope = scope
-        self.__output = RigOutput(self,ordinal=index)
-        atom.Atom.__init__(self,ordinal=index,domain=domain.Aniso(),policy=RigInputPolicy(self.__scope,self.__output),protocols='remove')
-        self.__peer[self.__index] = self.__output
+        self.__monitors = {}
+
+        self.__output_peer[self.__index] = RigOutput(self,ordinal=index,scope=self.__output_peer.scope())
+        policy=RigInputPolicy(self.__scope,self.__output_peer[self.__index])
+
+        atom.Atom.__init__(self,ordinal=index,domain=domain.Aniso(),policy=policy,protocols='remove')
+
 
     def destroy_input(self):
-        self.__peer[self.__index].notify_destroy()
-        del self.__peer[self.__index]
+        self.__output_peer[self.__index].notify_destroy()
+        del self.__output_peer[self.__index]
 
     def property_change(self,key,value):
         if key in ['name','ordinal']:
-            self.__output.set_property(key,value,notify=False,allow_veto=False)
+            self.__output_peer[self.__index].set_property(key,value,notify=False,allow_veto=False)
+
+    def handler(self,v):
+        self.data_node().set_data(v)
+
+    def set_domain(self,dom):
+        self.set_property_string('domain',str(dom))
+
+    def __setup(self):
+        first_aniso = None
+
+        for (k,v) in self.__monitors.items():
+            if not v.domain().iso():
+                if first_aniso is None:
+                    first_aniso = k
+
+        if first_aniso is not None:
+            self.set_domain(self.__monitors[first_aniso].domain())
+            return
+
+        self.set_domain(domain.Aniso())
+
+    def add_monitor(self,inp):
+        iid = id(inp)
+        if iid in self.__monitors:
+            self.__monitors[iid].clear_downstream()
+            del self.__monitors[iid]
+        self.__monitors[iid] = inp
+        self.__setup()
+
+    def del_monitor(self,inp):
+        iid = id(inp)
+        if iid in self.__monitors:
+            self.__monitors[iid].clear_downstream()
+            del self.__monitors[iid]
+            self.__setup()
 
 class InputList(collection.Collection):
     def __init__(self,scope):
-        self.__peer = None
+        self.__output_peer = None
         self.__scope = scope
         collection.Collection.__init__(self,names='input')
 
-    def set_peer(self,peer):
-        self.__peer = peer
-        self.__peer.set_peer(self)
+    def set_output_peer(self,output_peer):
+        self.__output_peer = output_peer
+        self.__output_peer.set_peer(self)
+
+    def scope(self):
+        return self.__scope
 
     def create_input(self,name):
         names = name.split()
@@ -278,7 +411,7 @@ class InputList(collection.Collection):
             names = ''
 
         k = self.find_hole()
-        j = RigInput(self.__scope,self.__peer,k)
+        j = RigInput(self.__scope,k,self.__output_peer)
         j.set_names(' '.join(names))
         j.set_ordinal(ordinal)
         self[k] = j
@@ -287,7 +420,7 @@ class InputList(collection.Collection):
     @async.coroutine('internal error')
     def instance_create(self,name):
         k = self.find_hole()
-        j = RigInput(self.__scope,self.__peer,k)
+        j = RigInput(self.__scope,k,self.__output_peer)
         j.set_ordinal(name)
         self[k] = j
         yield async.Coroutine.success(j)
@@ -298,18 +431,32 @@ class InputList(collection.Collection):
         e.destroy_input()
 
     def dynamic_create(self,i):
-        return RigInput(self.__scope,self.__peer,i)
+        return RigInput(self.__scope,i,self.__output_peer)
 
     def dynamic_destroy(self,i,v):
         v.destroy_input()
         
 class OutputList(atom.Atom):
-    def __init__(self):
-        atom.Atom.__init__(self,names='output',protocols='create')
+    def __init__(self,scope=None):
+        atom.Atom.__init__(self,names="output",protocols='create',dynlist=True)
         self.__peer = None
+        self.__scope = scope
+
+    def scope(self):
+        return self.__scope
+
+    def load_state(self,state,delegate,phase):
+        if phase == 1:
+            delegate.set_deferred(self,state)
+            return async.success()
+
+        return atom.Atom.load_state(self,state,delegate,phase-1)
 
     def set_peer(self,peer):
         self.__peer = peer
+
+    def scope(self):
+        return self.__scope
 
     def rpc_createinstance(self,arg):
         return self.__peer.rpc_createinstance(arg)
@@ -333,7 +480,7 @@ class InnerAgent(agent.Agent):
         self.__workspace = workspace.Workspace(self.__name,self,self.__registry)
 
         self[1] = self.__workspace
-        self[2] = OutputList()
+        self[2] = OutputList(self.__name)
         self[3] = InputList(self.__name)
 
         self.add_verb2(1,'create([],None,role(None,[abstract,matches([input])]),option(called,[abstract]))',self.__create_input)
@@ -352,7 +499,10 @@ class InnerAgent(agent.Agent):
         return self.__workspace.save_file(filename)
 
     def load(self,filename):
-        return self.__workspace.load_file(filename)
+        return self.__workspace.load_file(filename,post_load=False)
+
+    def post_load(self,filename):
+        return self.__workspace.post_load(filename)
 
     def server_opened(self):
         agent.Agent.server_opened(self)
@@ -404,11 +554,12 @@ class OuterAgent(agent.Agent):
 
         self.set_property_string('rig',self.file_name)
 
-        self[2] = OutputList()
+        self[2] = OutputList(self.inner_name)
         self[3] = InputList(None)
 
-        self[3].set_peer(self.__inner_agent[2])
-        self.__inner_agent[3].set_peer(self[2])
+        self[3].set_output_peer(self.__inner_agent[2])
+
+        self.__inner_agent[3].set_output_peer(self[2])
 
         self.add_verb2(1,'create([],None,role(None,[abstract,matches([input])]),option(called,[abstract]))',self.__create_input)
         self.add_verb2(2,'create([],None,role(None,[abstract,matches([output])]),option(called,[abstract]))',self.__create_output)
@@ -433,16 +584,27 @@ class OuterAgent(agent.Agent):
         self.__inner_agent[3].create_input(name)
 
     @async.coroutine('internal error')
-    def agent_postload(self,filename):
-        if os.path.exists(filename):
-            print 'loading rig',self.inner_name,'from',filename
-            r = self.__inner_agent.load(self.rig_file(filename))
+    def load_state(self,state,delegate,phase):
+        yield agent.Agent.load_state(self,state,delegate,phase)
+        rig_file = self.rig_file(delegate.path)
+        print 'rig load state',phase,rig_file
+        if os.path.exists(rig_file):
+            print 'loading rig',self.inner_name,'from',rig_file
+            r = self.__inner_agent.load(rig_file)
             yield r
             print 'rig load errors',r.args()[0]
 
     def agent_presave(self,filename):
         print 'starting presave',filename
         return self.__inner_agent.save(self.rig_file(filename))
+
+    def agent_postload(self,filename):
+        rig_file = self.rig_file(filename)
+        agent.Agent.agent_postload(self,filename)
+        return self.__inner_agent.post_load(rig_file)
+
+    def agent_preload(self,filename):
+        agent.Agent.agent_preload(self,filename)
 
     def server_opened(self):
         agent.Agent.server_opened(self)

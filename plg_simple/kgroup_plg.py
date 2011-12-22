@@ -130,13 +130,13 @@ class Controller:
     def set_course_semis(self,idx,val):
         self.ensure(idx)
         l = [i.as_float() for i in self.getlist('courseoffset')]
-        l[idx-1] = float(val)
+        l[idx-1] = float(val+10000 if val else 0)
         self.setlist('courseoffset',[piw.makefloat(i,0) for i in l])
 
     def set_course_steps(self,idx,val):
         self.ensure(idx)
         l = [i.as_float() for i in self.getlist('courseoffset')]
-        l[idx-1] = float(val+10000 if val else 0)
+        l[idx-1] = float(val)
         self.setlist('courseoffset',[piw.makefloat(i,0) for i in l])
 
     def get_courses(self):
@@ -391,13 +391,14 @@ class OutputList(atom.Atom):
 
         return async.failure('output not in use')
 
+    @async.coroutine('internal error')
     def load_state(self,state,delegate,phase):
         self.__plumbing = False
 
         for v in self.values():
             v.unplumb()
 
-        atom.Atom.load_state(self,state,delegate,phase)
+        yield atom.Atom.load_state(self,state,delegate,phase)
 
         for v in self.values():
             v.enable(False)
@@ -687,7 +688,15 @@ class Agent(agent.Agent):
                 self.mapper.set_upstream_rowlen(piw.makenull(0))
 
             # recalculate all key geometries based on the upstream geometry
-            self.__set_physical_geo(self.__cur_mapping())
+            (rowlen, rowoffset) = self.__set_physical_geo(self.__cur_mapping())
+
+            self.controller.settuple('rowlen',rowlen)
+            self.controller.settuple('rowoffset',rowoffset)
+
+            self.mapper.set_rowlen(rowlen)
+            self.mapper.set_rowoffset(rowoffset)
+
+            self[1].update_status_indexes()
 
             # transform the mode key row and column in case it was set from an
             # upgraded setup that only set the key in a sequential position
@@ -909,8 +918,11 @@ class Agent(agent.Agent):
         self.__choices = []
         self.__course=1
 
+        # we're clearing the mapping before starting choosing so that the upstream geometry is used
         self.mapper.clear_mapping()
         self.mapper.activate_mapping()
+        self.key_mapper.enable(1,False)
+        self.key_mapper.enable(1,True)
 
         curmap = self.__cur_mapping() # [[from,to 1..N]]
         active = [f for (f,t) in curmap] # all active keys
@@ -939,11 +951,11 @@ class Agent(agent.Agent):
         for k in range(1,self.__upstream_size+1):
             if k in active:
                 if k in self.__coursekeys:
-                    self.status_buffer.set_status(0,k,const.status_choose_active)
+                    self.status_buffer.set_status(False,0,k,const.status_choose_active)
                 else:
-                    self.status_buffer.set_status(0,k,const.status_choose_used)
+                    self.status_buffer.set_status(False,0,k,const.status_choose_used)
             else:
-                self.status_buffer.set_status(0,k,const.status_choose_available)
+                self.status_buffer.set_status(False,0,k,const.status_choose_available)
 
         self.status_buffer.send()
 
@@ -980,15 +992,16 @@ class Agent(agent.Agent):
         if not keynum in self.__choices:
             self.__choices.append(keynum)
             for k in self.__coursekeys:
-                self.status_buffer.set_status(0,k,const.status_choose_used)
+                self.status_buffer.set_status(False,0,k,const.status_choose_used)
             self.__coursekeys=[]
-            self.status_buffer.set_status(0,keynum,const.status_choose_active)
+            self.status_buffer.set_status(False,0,keynum,const.status_choose_active)
             self.status_buffer.send()
         
     def __unchoose(self,subject):
         self.mode_selector.choose(False)
         piw.changelist_disconnect_nb(self.keypulse,self.keychoice)
         self.status_buffer.override(False)
+        self.__set_mapping(self.__cur_mapping())
         self[29].set_value(None)
         
     def __do_mapping(self):
@@ -1065,12 +1078,7 @@ class Agent(agent.Agent):
                 else:
                     rowoffset = piw.tupleadd(rowoffset, piw.makenull(0))
 
-        self.controller.settuple('rowlen',rowlen)
-        self.controller.settuple('rowoffset',rowoffset)
-        self.mapper.set_rowlen(rowlen)
-        self.mapper.set_rowoffset(rowoffset)
-
-        self[1].update_status_indexes()
+        return (rowlen,rowoffset)
 
     def __set_mapping(self,mapping):
         mapper = self.mapper
@@ -1081,10 +1089,18 @@ class Agent(agent.Agent):
             self.mapper.set_mapping(src,dst)
 
         # determine the physical geometry
-        self.__set_physical_geo(mapping)
+        (rowlen, rowoffset) = self.__set_physical_geo(mapping)
+
+        self.mapper.set_rowlen(rowlen)
+        self.mapper.set_rowoffset(rowoffset)
+
+        self[1].update_status_indexes()
 
         # activate the mappings
         mapper.activate_mapping()
+
+        self.controller.settuple('rowlen',rowlen)
+        self.controller.settuple('rowoffset',rowoffset)
 
         # store the mapping description in the state of the agent
         mapstr = logic.render_term(mapping)

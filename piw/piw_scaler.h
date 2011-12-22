@@ -55,7 +55,7 @@ namespace piw
     struct PIW_DECLSPEC_CLASS scaler_subscriber_t
     {
         virtual ~scaler_subscriber_t() {}
-        virtual void control_changed(unsigned,const unsigned char *) {}
+        virtual void control_changed(const piw::data_nb_t &) {}
     };
 
     class PIW_DECLSPEC_CLASS scaler_controller_t
@@ -124,14 +124,14 @@ namespace piw
                     for(unsigned c=0; c<ncourses_; ++c)
                     {
                         float adj = co.at(c);
-                        if(adj>500.f)
+                        if(adj>5000.f)
                         {
                             adj -= 10000.f;
-                            number += (int)adj;
+                            note += adj;
                         }
                         else
                         {
-                            note += adj;
+                            number += (int)adj;
                         }
 
                         unsigned nk = (unsigned)lengths_.at(c);
@@ -180,6 +180,17 @@ namespace piw
                 unsigned size()
                 {
                     return notes_.size();
+                }
+
+                unsigned courses()
+                {
+                    return ncourses_;
+                }
+
+                unsigned length(unsigned c)
+                {
+                    if(c>=lengths_.size()) return 0;
+                    return lengths_[c];
                 }
 
                 int knum(unsigned i)
@@ -249,7 +260,7 @@ namespace piw
             class impl_t;
 
         public:
-            scaler_t(scaler_controller_t *,const cookie_t &c, const pic::f2f_t &b);
+            scaler_t(scaler_controller_t *,const cookie_t &c,const cookie_t &l,const pic::f2f_t &b);
             ~scaler_t();
 
             void set_bend_curve(const pic::f2f_t &b);
