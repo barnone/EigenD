@@ -141,8 +141,9 @@ namespace
 
     struct convolver_cfilterfunc_t : piw::cfilterfunc_t
     {
-        convolver_cfilterfunc_t() :
-            conv_engine_(0), wet_dry_mix_(512), fade_gain_(512), mono_(false), sample_rate_(48000), buffer_size_(PLG_CLOCK_BUFFER_SIZE),
+        convolver_cfilterfunc_t(const pic::f2f_t &vol) :
+            volfunc_(vol),
+            conv_engine_(0), dry_gain_(512), wet_gain_(512), fade_gain_(512), mono_(false), sample_rate_(48000), buffer_size_(PLG_CLOCK_BUFFER_SIZE),
             imp_resp_(), fade_count_(0), fade_samples_(0), enable_fade_samples_(0), linger_count_(0), linger_num_(1), lingering_(false),
             updating_(false), gain_(1.0f)
         {
@@ -508,10 +509,14 @@ namespace
                 env->cfilterenv_reset(i+1, id.time());
             }
 
-            // get the latest mix to make sure the first one is set
+            // get the latest gains to make sure the first one is set
             if(env->cfilterenv_latest(3,d,id.time()))
             {
-                wet_dry_mix_.set(d.as_renorm(0,1,0));
+                dry_gain_.set(volfunc_(d.as_renorm(-24,24,0)));
+            }
+            if(env->cfilterenv_latest(4,d,id.time()))
+            {
+                wet_gain_.set(volfunc_(d.as_renorm(-24,24,0)));
             }
 
             return true;
@@ -530,13 +535,15 @@ namespace
                 }
             }
 
-            // wet/dry mix
+            // wet/dry volumes 
             if(latest(3,d,env,t))
             {
-                //pic::logmsg() << "wet/dry " << d;
-                wet_dry_mix_.set(d.as_renorm(0,1,0));
+                dry_gain_.set(volfunc_(d.as_renorm(-24,24,0)));
             }
-
+            if(latest(4,d,env,t))
+            {
+                wet_gain_.set(volfunc_(d.as_renorm(-24,24,0)));
+            }
         }
 
         bool cfilterfunc_process(piw::cfilterenv_t *e, unsigned long long f, unsigned long long t,unsigned long sr, unsigned bs)
@@ -600,6 +607,7 @@ namespace
                     memcpy(inpbuff_[c]+inpoffs_, buffer_in[c], buffer_size_*sizeof(float));
 
                     // have to clear output buffer before processing
+                    memset(buffer_out[c], 0, buffer_size_ * sizeof (float));
                     memset(outbuff_[c], 0, buffer_size_ * sizeof (float));
 
                 } // channel
@@ -616,15 +624,10 @@ namespace
                 // ------- write to output buffers -------
                 for(unsigned c=0; c<channels; c++)
                 {
-                    // copy output buffer from engine
-                    memcpy(buffer_out[c], outbuff_[c], buffer_size_*sizeof(float));
-
                     for(unsigned i=0; i<buffer_size_; i++)
                     {
-                        // (1-wet_dry_mix_)*dry + wet_dry_mix_*wet;
-                        buffer_out[c][i] = buffer_in[c][i] + wet_dry_mix_.get() * (fade_gain_.get() * buffer_out[c][i] - buffer_in[c][i]);
+                        buffer_out[c][i] = dry_gain_.get() * buffer_in[c][i] + wet_gain_.get() * fade_gain_.get() * outbuff_[c][i];
                     }
-
                 } // channel
 
                 // copy left to right for mono processing
@@ -708,7 +711,7 @@ namespace
                     // copy input to output applying mix level to the input
                     for(unsigned i=0; i<buffer_size_; i++)
                     {
-                        buffer_out[c][i] = (1 - wet_dry_mix_.get() ) * buffer_in[c][i];
+                        buffer_out[c][i] = dry_gain_.get() * buffer_in[c][i];
                     }
                 }
             }
@@ -722,7 +725,7 @@ namespace
                 e->cfilterenv_output(i+1, audio_out[i]);
                 // clear the last_audio_ inputs to prevent the input buffer cycling
                 // when the input event stop
-                last_audio_[i].clear();
+                last_audio_[i].clear_nb();
             }
 
 
@@ -765,6 +768,8 @@ namespace
 //
 //        }
 
+        // volume db table
+        pic::f2f_t volfunc_;
 
         // the convolution engine
         Convlevel *conv_engine_;
@@ -783,7 +788,8 @@ namespace
         float silence_[PLG_CLOCK_BUFFER_SIZE];
 
         // global parameters
-        interp_param_t wet_dry_mix_;
+        interp_param_t dry_gain_;
+        interp_param_t wet_gain_;
         interp_param_t fade_gain_;
 
         // global variables
@@ -827,7 +833,7 @@ namespace
 
     struct convolver_cfilter_t: piw::cfilterctl_t, piw::cfilter_t, pic::tracked_t
     {
-        convolver_cfilter_t(const piw::cookie_t &o, piw::clockdomain_ctl_t *d) : cfilter_t(this,o,d), convolver_func_(), clockdomain_(d)
+        convolver_cfilter_t(const pic::f2f_t &vol, const piw::cookie_t &o, piw::clockdomain_ctl_t *d) : cfilter_t(this,o,d), convolver_func_(vol), clockdomain_(d)
         {
             d->add_listener(pic::notify_t::method(this,&convolver_cfilter_t::clock_changed));
 
@@ -878,6 +884,7 @@ namespace plg_convolver
         unsigned char b1 = 0;
         unsigned char b2 = 0;
         unsigned char b3 = 0;
+        float reduce_24db = 0.063095734448019f;
 
         long n = data.size();
         switch(bitsPerSamp)
@@ -889,7 +896,7 @@ namespace plg_convolver
             {
                 b0 = (unsigned char)data[i];
                 f = (((float)b0)-128.0f)/128.0f;
-                ret->data[i] = f;
+                ret->data[i] = f*reduce_24db;
             }
             break;
         case 16:
@@ -899,9 +906,10 @@ namespace plg_convolver
             {
                 b0 = (unsigned char)data[i];
                 b1 = (unsigned char)data[i+1];
-                short s = (b1<<8)|(b0);
+                int s = (b1<<8)|(b0);
+                if(s>32767) s=s-65536;
                 f = ((float)s)/32768.f;
-                ret->data[i/2] = f;
+                ret->data[i/2] = f*reduce_24db;
             }
             break;
         case 24:
@@ -912,9 +920,10 @@ namespace plg_convolver
                 b0 = (unsigned char)data[i];
                 b1 = (unsigned char)data[i+1];
                 b2 = (unsigned char)data[i+2];
-                int m = (b2<<24)|(b1<<16)|(b0<<8);
-                f = ((float)m)/(8388608.f*256.f);
-                ret->data[i/3] = f;
+                long m = (b2<<16)|(b1<<8)|(b0);
+                if(m>8388607) m=m-16777216;
+                f = ((float)m)/8388608.f;
+                ret->data[i/3] = f*reduce_24db;
             }
             break;
         case 32:
@@ -928,7 +937,7 @@ namespace plg_convolver
                 b3 = (unsigned char)data[i+3];
                 unsigned l = (unsigned)((((unsigned)b3)<<24)|(((unsigned)b2)<<16)|(((unsigned)b1)<<8)|((unsigned)b0));
                 float *fp = (float *)&l;
-                ret->data[i/4] = *fp;
+                ret->data[i/4] = (*fp)*reduce_24db;
             }
             break;
         }
@@ -949,7 +958,7 @@ namespace plg_convolver
     struct convolver_t::impl_t
     {
         // also construct the convolver and tap classes
-        impl_t(const piw::cookie_t &o, piw::clockdomain_ctl_t *d) : convolver_(o,d) {}
+        impl_t(const pic::f2f_t &vol, const piw::cookie_t &o, piw::clockdomain_ctl_t *d) : convolver_(vol,o,d) {}
 
         convolver_cfilter_t convolver_;
     };
@@ -963,7 +972,7 @@ namespace plg_convolver
     // ------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
     // implement outer class that holds the implementation class
-    convolver_t::convolver_t(const piw::cookie_t &o, piw::clockdomain_ctl_t *d) : impl_(new impl_t(o,d)) {}
+    convolver_t::convolver_t(const pic::f2f_t &vol, const piw::cookie_t &o, piw::clockdomain_ctl_t *d) : impl_(new impl_t(vol,o,d)) {}
     convolver_t::~convolver_t() { delete impl_; }
     void convolver_t::set_impulse_response(samplearray2ref_t &imp_resp) { impl_->convolver_.convolver_func_.set_impulse_response(imp_resp); }
     void convolver_t::set_mono_processing(bool mono) { impl_->convolver_.convolver_func_.set_mono_processing(mono); }

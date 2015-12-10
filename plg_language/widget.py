@@ -19,7 +19,7 @@
 #
 
 from pi import atom,policy,utils,proxy,const,domain,logic,rpc,paths
-import language_native
+from . import language_native
 import piw
 import xmlrpclib
 
@@ -134,7 +134,7 @@ class Monitor(proxy.AtomProxy):
 
 class Widget(atom.Atom):
     def __init__(self,osc):
-        atom.Atom.__init__(self,policy=policy.FastReadOnlyPolicy(),domain=domain.Aniso(),protocols='connect-static output nostage hidden-connection')
+        atom.Atom.__init__(self,policy=policy.FastReadOnlyPolicy(),domain=domain.Aniso(),protocols='connect-static output nostage hidden-connection explicit')
         self.__send_queue = piw.fastdata(0)
         self.__recv_queue = piw.fastdata(0)
         piw.tsd_fastdata(self.__send_queue)
@@ -147,7 +147,7 @@ class Widget(atom.Atom):
         self.have_target = False
         self.have_widget = False
 
-    def property_change(self,key,value):
+    def property_change(self,key,value,delegate):
         if widget_debug:
             print 'Widget: property_change',key,value,'is open=',self.open()
         if self.open():

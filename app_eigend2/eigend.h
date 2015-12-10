@@ -45,8 +45,10 @@ namespace eigend
         virtual piw::term_t get_setups() = 0;
         virtual piw::term_t get_user_setups() = 0;
         virtual std::string get_setup_slot(const char *) = 0;
-        virtual void load_setup(const char *setup,bool upg) = 0;
+        virtual void load_setup(const char *setup,bool user) = 0;
         virtual void delete_setup(const char *) = 0;
+        virtual void set_current_setup(const char *setup,bool user) = 0;
+        virtual bool save_current_setup() = 0;
         virtual std::string save_setup(const char *slot, const char *tag,const char *desc,const bool make_default) = 0;
         virtual std::string edit_setup(const char *orig, const char *slot, const char *tag,const char *desc) = 0;
         virtual std::string get_description(const char *file) = 0;
@@ -54,14 +56,14 @@ namespace eigend
         virtual std::string get_email() = 0;
         virtual std::string get_username() = 0;
         virtual std::string get_subject() = 0;
-        virtual std::string get_default_setup(bool force) = 0;
+        virtual std::string get_default_setup(bool init) = 0;
         virtual void set_default_setup(const char *) = 0;
         virtual std::string notes_to_words(const std::string &) = 0;
         virtual std::string words_to_notes(const std::string &) = 0;
         virtual void file_bug(const std::string &u, const std::string &e, const std::string &s, const std::string &d) = 0;
         virtual void upgrade_setups() = 0;
         virtual void quit() = 0;
-        virtual void prepare_quit() = 0;
+        virtual bool prepare_quit() = 0;
     };
 
 }

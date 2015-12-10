@@ -63,20 +63,20 @@ def main(klass,upgrader=None,gui=False):
 
     """
 
-    def __main(env,name,ordinal):
+    def __main(env,name,ordinal,enclosure,mordinal):
         piw.setenv(env)
         root = klass(name,ordinal)
         piw.tsd_server(name,root)
         root.advertise('<main>')
+        if enclosure:
+            root.set_enclosure(enclosure)
+        if mordinal:
+            root.set_ordinal(int(mordinal))
         return root
 
     def __unload(env,obj,destroy):
-
-        ss=''
         if hasattr(obj,'unload'):
-            ss = obj.unload(destroy)
-
-        return ss
+            obj.unload(destroy)
 
     def __on_quit(obj):
         obj.quit()
@@ -208,9 +208,29 @@ class Agent(atom.Atom):
         self.add_verb2(207,'down([],~a,role(None,[partof(~s),notproto(down)]),role(by,[numeric]))', self.__verb_builtin_down_by)
 
         self.__state_buffer = []
+        self.__enclosure = None
 
     def load_agent_state(self,delegate):
         return async.success()
+
+    def set_enclosure(self,enclosure):
+        print 'enclosure set to',enclosure
+        self.__enclosure = enclosure
+
+    def rpc_set_enclosure(self,enclosure):
+        self.set_enclosure(enclosure)
+
+    def get_enclosure(self):
+        return self.__enclosure
+
+    def get_description(self,full=False):
+        d = atom.Atom.get_description(self)
+
+        if full and self.__enclosure:
+            d = "%s %s" % (self.__enclosure,d)
+
+        return d
+
 
     @async.coroutine('internal error')
     def rpc_loadstate(self,arg):
@@ -248,26 +268,29 @@ class Agent(atom.Atom):
                 
         delegate = LoadResults()
         delegate.set_residual(self,state)
-
         yield self.load_agent_state(delegate)
 
+        oldkeys = set(delegate.residual.keys())
         while delegate.residual:
             r = delegate.residual
-            r2 = r.copy()
             delegate.residual = {}
 
             while r:
                 (k,v) = r.popitem()
                 yield k.load_state(v,delegate,1)
 
-            if delegate.residual.keys() == r2.keys():
+            newkeys = set(delegate.residual.keys())
+            if oldkeys == newkeys:
                 break
+
+            oldkeys = newkeys
 
         if delegate.residual:
             print 'didnt load after phase 1:',[(k,v.render()) for (k,v) in delegate.residual.items()]
 
         delegate.residual = delegate.deferred
 
+        oldkeys = set(delegate.residual.keys())
         while delegate.residual:
             r = delegate.residual
             r2 = r.copy()
@@ -277,8 +300,11 @@ class Agent(atom.Atom):
                 (k,v) = r.popitem()
                 yield k.load_state(v,delegate,2)
 
-            if delegate.residual.keys() == r2.keys():
+            newkeys = set(delegate.residual.keys())
+            if oldkeys == newkeys:
                 break
+
+            oldkeys = newkeys
 
         if delegate.residual:
             print 'didnt load after phase 2:',[(k,v.render()) for (k,v) in delegate.residual.items()]
@@ -474,13 +500,10 @@ class Agent(atom.Atom):
         atom.Atom.close_server(self)
 
     def unload(self,destroy=False):
-        ss = ''
-        if self.open():
-            ss = logic.render_term(tuple([ss.id() for ss in self.__subsystems.values()]))
-        self.notify_destroy()
+        print 'agent unload, destroy=',destroy
+        if destroy:
+            self.notify_destroy()
         self.close_server()
-
-        return ss
 
     def quit(self):
         for v in self.__subsystems.itervalues():

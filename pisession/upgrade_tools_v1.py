@@ -331,7 +331,7 @@ class Node:
             
 
 class Agent:
-    def __init__(self,name,version,cversion,module=None,instance=None):
+    def __init__(self,name,version,cversion,module,instance=None):
         self.name = name
         self.version = version
         self.cversion = cversion
@@ -344,17 +344,12 @@ class Agent:
 
 class Registry(registry.Registry):
     def __init__(self):
-        registry.Registry.__init__(self)
+        registry.Registry.__init__(self,Agent)
         self.__instances = {}
-        zd=os.path.join(picross.release_root_dir(),'plugins')
-        self.scan_path(zd, lambda n,v,c,m: Agent(n,v,c,module=m))
         self.add_agentd()
 
-    def add_module(self,name,version,cversion,module):
-        return registry.Registry.add_module(self,name,version,cversion,module)
-
     def add_agentd(self):
-        self.add_module(upgrade_agentd.plugin,upgrade_agentd.version,upgrade_agentd.cversion,Agent(upgrade_agentd.plugin,upgrade_agentd.version,upgrade_agentd.cversion,instance=upgrade_agentd.upgrade))
+        self.add_module(upgrade_agentd.plugin,upgrade_agentd.version,upgrade_agentd.cversion,Agent(upgrade_agentd.plugin,upgrade_agentd.version,upgrade_agentd.cversion,None,instance=upgrade_agentd.upgrade))
 
     def get_instance(self,agent):
         if agent.instance:
@@ -364,7 +359,7 @@ class Registry(registry.Registry):
         if sig in self.__instances:
             return self.__instances[sig]
 
-        m = __import__(agent.module,fromlist=['upgrade'])
+        m = registry.import_module(agent.module)
         self.__instances[sig] = m.upgrade
         return m.upgrade
 

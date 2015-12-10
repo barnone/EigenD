@@ -28,10 +28,13 @@
 #define RES_PATH_MAX MAX_PATH
 #include <windows.h>
 #include <shlobj.h>
+#include <iostream>
 #else
 #include <dlfcn.h>
 #include <limits.h>
 #include <stdlib.h>
+#include <sys/stat.h>
+#include <sys/file.h>
 #define RES_SEPERATOR '/'
 #define RES_SEPERATOR_STR "/"
 #define RES_PATH_MAX PATH_MAX
@@ -39,6 +42,7 @@
 
 #include <picross/pic_resources.h>
 #include <string.h>
+#include <fcntl.h>
 
 namespace
 {
@@ -94,6 +98,7 @@ namespace
         WideCharToMultiByte(CP_UTF8,0,dest,-1,buffer,RES_PATH_MAX+1,0,0);
         strcat(buffer,RES_SEPERATOR_STR);
         strcat(buffer,"Eigenlabs");
+        pic::mkdir(buffer);
     }
 
     static void get_pyprefix(char *buffer)
@@ -112,6 +117,12 @@ namespace
     }
 
     static void get_pritool(char *buffer)
+    {
+        get_exe(buffer);
+        dirname(buffer);
+    }
+
+    static void get_priexe(char *buffer)
     {
         get_exe(buffer);
         dirname(buffer);
@@ -146,6 +157,7 @@ namespace
     {
         strcpy(buffer,getenv("HOME"));
         strcat(buffer,"/Library/Eigenlabs");
+        pic::mkdir(buffer);
     }
 
     static void get_pyprefix(char *buffer)
@@ -190,6 +202,12 @@ namespace
         }
     }
 
+    static void get_priexe(char *buffer)
+    {
+        get_exe(buffer);
+        dirname(buffer);
+    }
+
 
 #endif
 
@@ -205,6 +223,7 @@ namespace
     {
         strcpy(buffer,getenv("HOME"));
         strcat(buffer,"/.Eigenlabs");
+        pic::mkdir(buffer);
     }
 
     static void get_prefix(char *buffer)
@@ -234,6 +253,12 @@ namespace
     }
 
     static void get_pritool(char *buffer)
+    {
+        get_exe(buffer);
+        dirname(buffer);
+    }
+
+    static void get_priexe(char *buffer)
     {
         get_exe(buffer);
         dirname(buffer);
@@ -293,6 +318,26 @@ std::string pic::python_prefix_dir()
     return buffer;
 }
 
+std::string pic::contrib_root_dir()
+{
+    char buffer[RES_PATH_MAX+1];
+    get_prefix(buffer);
+    strcat(buffer,RES_SEPERATOR_STR);
+    strcat(buffer,"contrib-");
+    strcat(buffer,PI_RELEASE);
+    return buffer;
+}
+
+std::string pic::contrib_compatible_dir()
+{
+    char buffer[RES_PATH_MAX+1];
+    get_prefix(buffer);
+    strcat(buffer,RES_SEPERATOR_STR);
+    strcat(buffer,"contrib-");
+    strcat(buffer,PI_COMPATIBLE);
+    return buffer;
+}
+
 std::string pic::release_root_dir()
 {
     char buffer[RES_PATH_MAX+1];
@@ -344,9 +389,29 @@ std::string pic::private_tools_dir()
     return buffer;
 }
 
+std::string pic::private_exe_dir()
+{
+    char buffer[RES_PATH_MAX+1];
+    get_priexe(buffer);
+    return buffer;
+}
+
 std::string pic::release()
 {
     return PI_RELEASE;
+}
+
+std::string pic::lockfile(const std::string &name)
+{
+    char buffer[RES_PATH_MAX+1];
+    get_lib(buffer);
+    strcat(buffer,RES_SEPERATOR_STR);
+    strcat(buffer,"Lock");
+    pic::mkdir(buffer);
+    strcat(buffer,RES_SEPERATOR_STR);
+    strcat(buffer,name.c_str());
+    strcat(buffer,".lck");
+    return buffer;
 }
 
 std::string pic::username()
@@ -357,3 +422,238 @@ std::string pic::username()
     return getenv("USER");
 #endif
 }
+
+int pic::mkdir(std::string dirname)
+{
+    return pic::mkdir(dirname.c_str());
+}
+
+int pic::mkdir(const char *dirname)
+{
+#ifndef PI_WINDOWS
+    return ::mkdir(dirname, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
+#else
+    int wchars_num = MultiByteToWideChar(CP_UTF8,0,dirname,-1,NULL,0);
+    wchar_t* wstr = new wchar_t[wchars_num];
+    MultiByteToWideChar(CP_UTF8,0,dirname,-1,wstr,wchars_num);
+
+    int result = ::_wmkdir(wstr);
+
+    delete[] wstr;
+
+    return result;
+#endif
+}
+
+int pic::remove(std::string path)
+{
+    return pic::remove(path.c_str());
+}
+
+int pic::remove(const char *path)
+{
+#ifndef PI_WINDOWS
+    return ::remove(path);
+#else
+    int wchars_num = MultiByteToWideChar(CP_UTF8,0,path,-1,NULL,0);
+    wchar_t* wstr = new wchar_t[wchars_num];
+    MultiByteToWideChar(CP_UTF8,0,path,-1,wstr,wchars_num);
+
+    int result = ::_wremove(wstr);
+
+    delete[] wstr;
+
+    return result;
+#endif
+}
+
+FILE *pic::fopen(std::string filename, const char *mode)
+{
+    return pic::fopen(filename.c_str(), mode);
+}
+
+FILE *pic::fopen(const char *filename, const char *mode)
+{
+#ifndef PI_WINDOWS
+    return ::fopen(filename, mode);
+#else
+    int wchars_num1 = MultiByteToWideChar(CP_UTF8,0,filename,-1,NULL,0);
+    wchar_t* wstr1 = new wchar_t[wchars_num1];
+    MultiByteToWideChar(CP_UTF8,0,filename,-1,wstr1,wchars_num1);
+
+    int wchars_num2 = MultiByteToWideChar(CP_UTF8,0,mode,-1,NULL,0);
+    wchar_t* wstr2 = new wchar_t[wchars_num2];
+    MultiByteToWideChar(CP_UTF8,0,mode,-1,wstr2,wchars_num2);
+
+    FILE *file = ::_wfopen(wstr1, wstr2);
+
+    delete[] wstr1;
+    delete[] wstr2;
+
+    return file;
+#endif
+}
+
+int pic::open(std::string filename, int oflags)
+{
+    return pic::open(filename, oflags, 0);
+}
+
+int pic::open(const char *filename, int oflags)
+{
+    return pic::open(filename, oflags, 0);
+}
+
+int pic::open(std::string filename, int oflags, int cflags)
+{
+    return pic::open(filename.c_str(), oflags);
+}
+
+int pic::open(const char *filename, int oflags, int cflags)
+{
+#ifndef PI_WINDOWS
+    if(oflags & O_CREAT)
+    {
+        return ::open(filename, oflags, cflags);
+    }
+    else
+    {
+        return ::open(filename, oflags);
+    }
+#else
+    int wchars_num = MultiByteToWideChar(CP_UTF8,0,filename,-1,NULL,0);
+    wchar_t* wstr = new wchar_t[wchars_num];
+    MultiByteToWideChar(CP_UTF8,0,filename,-1,wstr,wchars_num);
+
+    int result;
+    if(oflags & O_CREAT)
+    {
+        result = ::_wopen(wstr, oflags, cflags);
+    }
+    else
+    {
+        result = ::_wopen(wstr, oflags);
+    }
+
+    delete[] wstr;
+
+    return result;
+#endif
+}
+
+#ifndef PI_WINDOWS
+
+struct pic::lockfile_t::impl_t
+{
+    impl_t(const std::string &name): locked_(false)
+    {
+        fd_ = open(name.c_str(),O_RDWR|O_CREAT,0777);
+        printf("open lock file %s %d\n",name.c_str(),fd_);
+    }
+
+    ~impl_t()
+    {
+        if(fd_>=0)
+            close(fd_);
+    }
+
+    bool lock()
+    {
+        if(locked_)
+        {
+            return true;
+        }
+
+        if(fd_ < 0)
+        {
+            return false;
+        }
+
+        if(0==flock(fd_,LOCK_EX|LOCK_NB))
+        {
+            printf("locked lock file\n");
+            locked_ = true;
+            return true;
+        }
+
+        return false;
+    }
+
+    int fd_;
+    bool locked_;
+};
+
+#else
+
+struct pic::lockfile_t::impl_t
+{
+    impl_t(const std::string &name): locked_(false)
+    {
+        int wchars_num = MultiByteToWideChar(CP_UTF8,0,name.c_str(),-1,NULL,0);
+        WCHAR wstr [RES_PATH_MAX+1];
+        MultiByteToWideChar(CP_UTF8,0,name.c_str(),-1,wstr,wchars_num);
+
+        fd_ = CreateFile(wstr,GENERIC_READ|GENERIC_WRITE,FILE_SHARE_READ|FILE_SHARE_WRITE,NULL,OPEN_ALWAYS,0,NULL);
+    }
+
+    ~impl_t()
+    {
+        if(fd_ != INVALID_HANDLE_VALUE)
+            CloseHandle(fd_);
+    }
+
+    bool lock()
+    {
+        if(locked_)
+        {
+            return true;
+        }
+
+        if(fd_ == INVALID_HANDLE_VALUE)
+        {
+            return false;
+        }
+
+        if(LockFile(fd_,0,0,1,0))
+        {
+            locked_ = true;
+            return true;
+        }
+
+        return false;
+    }
+
+    HANDLE fd_;
+    bool locked_;
+};
+
+#endif
+
+pic::lockfile_t::lockfile_t(const std::string &name): name_(pic::lockfile(name)), impl_(0)
+{
+}
+
+pic::lockfile_t::~lockfile_t()
+{
+    if(impl_) delete impl_;
+}
+
+bool pic::lockfile_t::lock()
+{
+    if(!impl_)
+    {
+        impl_ = new impl_t(name_);
+    }
+
+    return impl_->lock();
+}
+
+void pic::lockfile_t::unlock()
+{
+    if(impl_)
+    {
+        delete impl_;
+        impl_ = 0;
+    }
+}
+

@@ -25,13 +25,67 @@ from pigui import utils
 from pisession import gui
 
 class LanguageDisplayModel:
-    def __init__(self,langmodel,listener=None):
+    def __init__(self,langmodel):
         self.langmodel=langmodel
-        self.listeners=[]
-        if listener:
-            self.addListener(listener)
-
         self.__addDisplay()
+
+    def matchesWord(self,notes):
+        music=''
+        for note in notes:
+            if note!='!':
+                music=music+note
+ 
+        reverse = self.get_reverse_lexicon()
+        matches={}
+
+        for key in reverse:
+            if key[:len(music)]==music and len(key)>len(music):
+                matches[key]=reverse[key][0]
+
+        return len(matches)>0        
+
+    def getWordTuples(self,words):
+        tuples=[]
+        reverse = self.get_reverse_lexicon()
+
+        for word in words:
+            english='***'
+            if word[1:] in reverse:
+                english=reverse[word[1:]][0]
+            tuples.append((word,english))
+
+        return tuples
+ 
+   
+    def getMusic(self,english):
+        forward = self.get_lexicon()
+
+        if english in forward:
+            return '!'+forward[english][0]
+        else:
+            return ''
+
+    def getEnglish(self,music):
+        reverse = self.get_reverse_lexicon()
+
+        if music in reverse:
+            return reverse[music][0]
+        else:
+            return ''
+
+    def words_to_notes(self,str):
+        words=[]
+        w=[]
+        w=str.split()
+        
+        for m in w:
+            if m[0].isdigit() or m[0]=='-':
+                for n in list(m):
+                    words.append((self.getMusic(n),n)) 
+            else:
+                words.append((self.getMusic(m),m))
+        
+        return words
 
     def __addDisplay(self):
         gui.call_bg_async(self.langmodel.addDisplay,self)
@@ -39,30 +93,21 @@ class LanguageDisplayModel:
     def close(self):
         self.langmodel.removeDisplay(self)
  
+    def get_reverse_lexicon(self):
+        return self.langmodel.get_reverse_lexicon()
+
+    def get_lexicon(self):
+        return self.langmodel.get_lexicon()
+
     def language_disconnected(self):
-        print 'LanguageDisplayModel:language_disconnected'
-        for listener in self.listeners:
-            listener.updateStatus("No Belcanto Interpreter")
+        pass
         
     def language_ready(self,name):
-        print 'LanguageDisplayModel:language_ready'
-        for listener in self.listeners:
-            print 'update status on  listeners'
-            listener.updateStatus( "Belcanto Interpreter connected")
+        pass
 
     def language_gone(self,name):
-        print 'LanguageDisplayModel:language_gone'
-        for listener in self.listeners:
-            listener.updateStatus( "Belcanto Interpreter disconnected")
+        pass
  
-    def addListener(self,listener):
-        if not listener in self.listeners:
-            self.listeners.append(listener)
-
-    def removeListener(self,listener):
-        if listener in self.listeners:
-            self.listeners.remove(listener)
-
     def cmdline_changed(self,cmdline):
         pass
     
@@ -78,11 +123,14 @@ class LanguageDisplayModel:
     def history_cleared(self):
         pass
 
+    def lexicon_changed(self):
+        print 'default lexicon changed'
+
 
 class IndexModel(piw.index):
 
     def __init__(self,database=None):
-        self.listeners=[]
+        self.__listeners=[]
         self.agentList=[]
         self.added=[]
         self.removed=[]
@@ -91,7 +139,7 @@ class IndexModel(piw.index):
 
     def index_opened(self):
         if self.updateList():
-            for listener in self.listeners:
+            for listener in self.__listeners:
                 listener.indexUpdate(self.added,self.removed)
 
     def index_closed(self):
@@ -100,7 +148,7 @@ class IndexModel(piw.index):
     def index_changed(self):
         if self.updateList():
             print 'Index model changed: updating listeners'
-            for listener in self.listeners:
+            for listener in self.__listeners:
                 listener.indexUpdate(self.added,self.removed)
     
     def updateList(self):
@@ -125,12 +173,12 @@ class IndexModel(piw.index):
                 listModified=True
         return listModified
 
-    def addListener(self,listener):
-        self.listeners.append(listener)
+    def addIndexListener(self,listener):
+        self.__listeners.append(listener)
 
-    def removeListener(self,listener):
-        if listener in self.listeners:
-            self.listeners.remove(listener)
+    def removeIndexListener(self,listener):
+        if listener in self.__listeners:
+            self.__listeners.remove(listener)
 
     def getName(self,id):
         if self.database:
@@ -144,17 +192,16 @@ class IndexModel(piw.index):
 
 
 class LanguageModel:
-    def __init__(self,connector=None):
+    def __init__(self):
         self.lang=None
         self.initialising=True
         self.agentIndex=IndexModel()
         piw.tsd_index('<language>',self.agentIndex)
-        self.agentIndex.addListener(self)
+        self.agentIndex.addIndexListener(self)
         self.languageAgents=[]
         self.langName=''
         self.displays=[]
         self.status=0
-        self.__connector = connector
  
     def update(self):
         self.languageAgents=self.agentIndex.getList()
@@ -171,6 +218,16 @@ class LanguageModel:
         self.lang=langproxy.LanguageProxy(name,delegate=self)
         self.langName=name
 
+    def get_reverse_lexicon(self):
+        if self.lang:
+            return self.lang.get_reverse_lexicon()
+        return {}
+
+    def get_lexicon(self):
+        if self.lang:
+            return self.lang.get_lexicon()
+        return {}
+
     def disconnect(self):
         self.lang.close_client()
 
@@ -179,6 +236,12 @@ class LanguageModel:
         #print 'history changed, max=',max
         for display in self.displays:
             gui.call_fg_async(display.history_changed,max)
+    
+    def lexicon_changed(self):
+        picross.display_active()
+        print 'lexicon_changed'
+        #for display in self.displays:
+        #    gui.call_fg_async(display.lexicon_changed)
     
     def history_cleared(self):
         picross.display_active()
@@ -204,30 +267,17 @@ class LanguageModel:
 
     def language_ready(self):
         print 'LanguageModel:language_ready' 
+
         for display in self.displays:
             gui.call_fg_async(display.language_ready,self.langName)
+
         self.status=1
-        if self.__connector is not None:
-
-            h1=self.lang.roll_id(1)
-            h2=self.lang.roll_id(2)
-            
-            v1=self.lang.yaw_id(1)
-            v2=self.lang.yaw_id(2)
-
-            a1=self.lang.activation_id(1)
-            a2=self.lang.activation_id(2)
-            a3=self.lang.activation_id(3)
-            a4=self.lang.activation_id(4)
-            a5=self.lang.activation_id(5)
-            a6=self.lang.activation_id(6)
-
-            h6=self.lang.roll_id(6)
-            v6=self.lang.yaw_id(6)
-            
-            a1=self.lang.activation_id(1)
-            gui.call_fg_async(self.__connector,h1,v1,h2,v2,a3,a4,a5,h6,v6,a1,a2,a6)
         self.lang.flush()
+
+    def lexicon_changed(self):
+        print 'LanguageModel:lexicon_changed'
+        for display in self.displays:
+            gui.call_fg_async(display.lexicon_changed)
 
     def language_gone(self):
         print 'LanguageModel:language_gone' 

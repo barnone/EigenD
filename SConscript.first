@@ -22,28 +22,33 @@ Import('master_env')
 
 import os.path
 
-release = '2.0.33'
+release = '2.0.76'
+compatible = '2.0'
 
 status = {
-    'windows': 'experimental',
+    'windows': 'stable',
     'linux': 'experimental',
-    'macosx': 'experimental'
+    'macosx': 'stable'
 }
 
 tag = '%s-%s' % (release,status[master_env['PI_PLATFORMTYPE']])
+compatible_tag = '%s-%s' % (compatible,status[master_env['PI_PLATFORMTYPE']])
 
 master_env.Prepend(CPPPATH=[master_env.Dir('.').srcnode().abspath])
 master_env.Prepend(CPPPATH=[os.path.join(master_env.Dir('.').srcnode().abspath,'steinberg')])
-master_env.PiRelease('release',tag)
+master_env.PiRelease('release',tag,compatible_tag)
 master_env.PiPackageDescription('eigend',desc='EigenD Application',groups=('app',))
+master_env.PiPackageDescription('eigend-build',desc='EigenD Build System',groups=('bld',))
+master_env.PiBuildSystem(package='eigend-build')
 
 if master_env['IS_WINDOWS']:
     prereq = [
-        ('runtime-1.0.0',"Please install the EigenD Resources package before installing EigenD.")
+        ('runtime-1.0.0',"Please install the EigenD Support package before installing EigenD.")
     ]
 
 if master_env['IS_MACOSX']:
     prereq = [
+        ('/usr/pi/Python.framework/Python',"Please install the EigenD Support package before installing EigenD.")
     ]
 
 if master_env['IS_LINUX']:

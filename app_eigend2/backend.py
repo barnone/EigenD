@@ -25,7 +25,8 @@ from pibelcanto import translate
 from app_eigend2 import version
 from pisession import agentd,session,upgrade
 
-import bugs
+import bugs_cli
+import latest_release
 
 import piw
 import picross
@@ -96,13 +97,15 @@ class GarbageCollector(threading.Thread):
 class Backend(eigend_native.c2p):
     def __init__(self):
         eigend_native.c2p.__init__(self)
-        self.bugfiler = bugs.BugFiler(self)
+        self.latest_release = latest_release.LatestReleasePoller(self)
         self.collector = None
         self.__progress = None
         self.__progress_lock = threading.Lock()
         self.saving = False
         self.quitting = False
         self.savcond = threading.Condition()
+        self.current_setup = None
+        self.current_setup_user = False
 
         self.fgthing = piw.thing()
         self.fgthing.set_slow_trigger_handler(utils.notify(self.fgdequeue))
@@ -111,6 +114,7 @@ class Backend(eigend_native.c2p):
         self.bgthing = piw.thing()
         self.bgthing.set_slow_trigger_handler(utils.notify(self.bgdequeue))
         self.bgqueue = []
+        self.frontend = None
 
         upgrade.clr_tmp_setup()
 
@@ -145,15 +149,18 @@ class Backend(eigend_native.c2p):
         self.args = args
 
     def __load_started(self,setup):
-        self.frontend.load_started(setup)
+        if self.frontend:
+            self.frontend.load_started(setup)
 
     def __load_ended(self,errors):
-        self.frontend.load_ended()
-        if errors:
-            self.frontent.alert_dialog('Load Problems','Load Problems','\n'.join(errors))
+        if self.frontend:
+            self.frontend.load_ended()
+            if errors:
+                self.frontend.alert_dialog('Load Problems','Load Problems','\n'.join(errors))
 
     def __set_latest_release(self,release):
-        self.frontend.set_latest_release(release)
+        if self.frontend:
+            self.frontend.set_latest_release(release)
 
     def load_started(self,setup):
         self.run_foreground_async(self.__load_started,setup)
@@ -171,7 +178,7 @@ class Backend(eigend_native.c2p):
         finally:
             self.__progress_lock.release()
 
-        if old:
+        if old and self.frontend:
             self.frontend.load_status(*old)
 
     def load_status(self,message,progress):
@@ -271,15 +278,25 @@ class Backend(eigend_native.c2p):
 
         raise RuntimeError('foreground sync job failed')
 
-    def get_default_setup(self,force):
-        if not force and self.opts.noauto:
+    def get_default_setup(self,init):
+        if init and self.opts.noauto:
             return ''
 
-        return agentd.get_default_setup()
+        setup = agentd.get_default_setup()
+        if not init and setup is None:
+            return ''
+
+        if setup is None:
+            return agentd.get_detected_setup()
+
+        return setup
 
     def __create_context(self,name):
-        logger = self.frontend.make_logger(name)
-        return self.scaffold.bgcontext(piw.tsd_scope(),utils.statusify(None),logger,name)
+        if self.frontend:
+            logger = self.frontend.make_logger(name)
+            return self.scaffold.bgcontext(piw.tsd_scope(),utils.statusify(None),logger,name)
+        else:
+            return None
 
     @utils.nothrow
     def initialise(self,frontend,scaffold,cookie,info):
@@ -300,13 +317,15 @@ class Backend(eigend_native.c2p):
 
             self.backend_context = self.__create_context('eigend-backend')
 
+            resource.clean_current_setup()
+
             def bginit():
                 self.agent = agentd.Agent(self,1)
                 piw.tsd_thing(self.bgthing)
 
             self.collector = GarbageCollector(self.scaffold,self.garbage_context)
             self.collector.start()
-            self.bugfiler.start(cookie,info)
+            self.latest_release.start(cookie,info)
             self.run_background(bginit)
         except:
             print >>sys.__stdout__,'Initialisation failure'
@@ -320,17 +339,18 @@ class Backend(eigend_native.c2p):
     def prepare_quit(self):
         self.savcond.acquire()
         try:
-            while self.saving:
-                self.savcond.wait(1)
+            if self.saving:
+                return False
             self.quitting = True
+            self.frontend = None
+            return True
         finally:
             self.savcond.release()
 
     def quit(self):
         self.savcond.acquire()
         try:
-            if not self.quitting:
-                self.prepare_quit()
+            self.quitting = True
         finally:
             self.savcond.release()
 
@@ -349,23 +369,27 @@ class Backend(eigend_native.c2p):
     def get_user_setups(self):
         return agentd.find_user_setups_flat()
 
-    def load_setup(self,setup,upg):
-        self.run_background_async(self.agent.load_file,setup,upg)
+    def load_setup(self,setup,user):
+        self.set_current_setup(setup,user)
+        self.run_background_async(self.agent.load_file,setup)
 
     def __alert_dialog(self,klass,label,text):
-        self.frontend.alert_dialog(klass,label,text)
+        if self.frontend:
+            self.frontend.alert_dialog(klass,label,text)
 
     def alert_dialog(self,klass,label,text):
         self.run_foreground_async(self.__alert_dialog,klass,label,text)
 
     def __info_dialog(self,klass,label,text):
-        self.frontend.info_dialog(klass,label,text)
+        if self.frontend:
+            self.frontend.info_dialog(klass,label,text)
 
     def info_dialog(self,klass,label,text):
         self.run_foreground_async(self.__info_dialog,klass,label,text)
 
     def __setups_changed(self,file):
-        self.frontend.setups_changed(file)
+        if self.frontend:
+            self.frontend.setups_changed(file)
 
     def __set_default_setup(self,path):
         agentd.set_default_setup(path)
@@ -385,19 +409,41 @@ class Backend(eigend_native.c2p):
         root_f = prefix+os.path.basename(root)
         prefix_len = len(prefix)
 
-        for f in os.listdir(root_d):
+        for f in resource.os_listdir(root_d):
             if f.startswith(root_f):
                 f2 = os.path.join(root_d,f[prefix_len:])
-                try: os.unlink(f2)
+                try: resource.os_unlink(f2)
                 except: pass
-                os.rename(os.path.join(root_d,f),f2)
+                resource.os_rename(os.path.join(root_d,f),f2)
 
     def save_tmp(self,root,prefix):
         root_d = os.path.dirname(root)
         root_f = prefix+os.path.basename(root)
         return os.path.join(root_d,root_f)
 
+    def set_current_setup(self,setup,user):
+        self.current_setup = setup
+        self.current_setup_user = user
+
+    def save_current_setup(self):
+        if not self.current_setup or not self.current_setup_user:
+            return False
+        
+        term = self.get_user_setups()
+        for i in range(1,term.arity()):
+            if self.current_setup == term.arg(i).arg(2).value().as_string():
+                slot = term.arg(i).arg(1).value().as_string()
+                tag = None
+                if term.arg(i).arg(0).value().is_string():
+                    tag = term.arg(i).arg(0).value().as_string()
+                desc = self.get_description(self.current_setup)
+                self.save_setup(slot,tag,desc,False)
+                return True
+
+        return False
+
     def save_setup(self,slot,tag,desc,make_default):
+        print 'save setup',slot,tag,desc,make_default
         self.savcond.acquire()
         try:
             if self.quitting:
@@ -408,6 +454,10 @@ class Backend(eigend_native.c2p):
             self.savcond.release()
 
         filename = agentd.user_setup_file(slot,tag)
+
+        def not_done(*args,**kwds):
+            print 'save failed:',args
+            self.info_dialog('Setup Not Saved','Setup Not Saved',"The user setup '"+slot+"' could not be saved\n"+args[1])
 
         def done(*args,**kwds):
             agentd.delete_user_slot(slot)
@@ -429,7 +479,7 @@ class Backend(eigend_native.c2p):
             self.info_dialog('Setup Saved','Setup Saved',"The user setup '"+slot+"' was successfully saved")
 
         r = self.run_background(self.agent.save_file,self.save_tmp(filename,'~'),desc)
-        r.setCallback(done,r).setErrback(done,r)
+        r.setCallback(done,r).setErrback(not_done,r)
         return filename
 
     def edit_setup(self,orig,slot,tag,desc):
@@ -450,10 +500,10 @@ class Backend(eigend_native.c2p):
             path_d = os.path.dirname(path)
             path_f = os.path.basename(path)
 
-            for f in os.listdir(orig_d):
+            for f in resource.os_listdir(orig_d):
                 if f.startswith(orig_f):
                     f2 = os.path.join(path_d,path_f+f[len(orig_f):])
-                    os.rename(os.path.join(orig_d,f),f2)
+                    resource.os_rename(os.path.join(orig_d,f),f2)
 
         database = state.open_database(path,True)
         trunk = database.get_trunk()
@@ -479,9 +529,9 @@ class Backend(eigend_native.c2p):
         return upgrade.get_description_from_file(setup)
 
     def __get_email(self):
-        filename = resource.user_resource_file('global',resource.user_details,version='')
+        filename = resource.user_resource_file(resource.global_dir,resource.user_details,version='')
         try:
-            l = open(filename,'r').readlines()
+            l = resource.file_open(filename,'r').readlines()
             return l[0].strip(),l[1].strip()
         except:
             return ('','')
@@ -496,9 +546,9 @@ class Backend(eigend_native.c2p):
         return 'Bug Report: ' + time.strftime("%a, %d %b %Y")
 
     def file_bug(self,user,email,subj,desc):
-        filename = resource.user_resource_file('global',resource.user_details,version='')
-        open(filename,'w').write("%s\n%s\n" % (user.strip(),email.strip()))
-        self.bugfiler.file(user,email,subj,desc)
+        filename = resource.user_resource_file(resource.global_dir,resource.user_details,version='')
+        resource.file_open(filename,'w').write("%s\n%s\n" % (user.strip(),email.strip()))
+        bugs_cli.file_bug(user,email,subj,desc)
 
     def get_setup_slot(self,slot):
         return agentd.get_setup_slot(slot)

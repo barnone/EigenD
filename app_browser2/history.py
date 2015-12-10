@@ -19,15 +19,21 @@
 #
 
 from pisession import gui
-from pigui import vocab, language
+from pigui import language
 
 class HistoryModel(language.LanguageDisplayModel): 
-    def __init__(self,langmodel,listener=None):
-        language.LanguageDisplayModel.__init__(self,langmodel,None)
+    def __init__(self,langmodel):
+        language.LanguageDisplayModel.__init__(self,langmodel)
+        self.__listeners=[]
         self.maxItems=50
-        self.vocab=vocab.Vocabulary()
         self.words=[]
-        self.listeners=[]
+
+    def addHistoryListener(self,listener):
+        self.__listeners.append(listener)
+
+    def update(self):
+        for listener in self.__listeners:
+            listener.historyUpdate()
 
     def history_cleared(self):
         self.clear()
@@ -60,9 +66,8 @@ class HistoryModel(language.LanguageDisplayModel):
                     speaker=h[3]
                 if words:
                     self.words=words
-                    for listener in self.listeners:
-                        listener.update()
-        
+                self.update()
+
         def history_failed():
             print 'history failed'
         r.setCallback(history_ok).setErrback(history_failed)
@@ -75,7 +80,7 @@ class HistoryModel(language.LanguageDisplayModel):
         for word in w.split():
             english='***'
             if word.startswith('!'):
-                english=self.vocab.getEnglish(word[1:])
+                english=self.getEnglish(word[1:])
             else:
                 english=word
 

@@ -19,12 +19,15 @@
 #
 
 from pi import async,logic,rpc,paths
-from plg_language import interpreter,imperative
+from . import interpreter,imperative
 
 
 class SubDelegate(interpreter.Delegate):
     def __init__(self):
         pass
+
+    def user_message(self,err):
+        return
 
     def error_message(self,err):
         return

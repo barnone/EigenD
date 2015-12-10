@@ -23,7 +23,8 @@ Module for talking to a standard language agent
 """
 
 import piw
-from pi import const,proxy,paths,utils,node,logic
+import pibelcanto
+from pi import const,proxy,paths,utils,node,logic,async
 import sys
 
 def make_subc_path(*l):
@@ -199,13 +200,15 @@ class HistoryProxy(proxy.AtomProxy):
 
 class LanguageProxy(proxy.AtomProxy):
 
-    monitor = set(['protocols'])
+    monitor = set(['protocols','timestamp'])
 
     def __init__(self, address, delegate = None):
         proxy.AtomProxy.__init__(self)
         self.__delegate = delegate or self
         self.__anchor = piw.canchor()
         self.__anchor.set_client(self)
+        self.__lexicon = pibelcanto.lexicon.lexicon.copy()
+        self.__reverse = pibelcanto.lexicon.reverse_lexicon.copy()
 
         self[2] = proxy.AtomProxy()
         self[11] = HistoryProxy(self.__delegate)
@@ -230,29 +233,10 @@ class LanguageProxy(proxy.AtomProxy):
     def flush(self):
         self[11].flush()
 
-    def yaw_id(self,key):
-        assert self.is_ready()
-        assert (key>0 and key<3) or key==6
-        return ("%s#9.3" % self.id(), str(key+10))
-
-    def roll_id(self,key):
-        assert self.is_ready()
-        assert (key>0 and key<3) or key==6
-        return ("%s#9.2" % self.id(), str(key+10))
-     
-    def pressure_id(self,key):
-        assert self.is_ready()
-        assert key>0 and key<5
-        return ("%s#9.4" % self.id(), str(key+10))
-
-    def activation_id(self,key):
-        assert self.is_ready()
-        assert key>0 and key<7
-        return ("%s#9.1" % self.id(), str(key+10))
-
     def node_ready(self):
         print 'proxy ready',self.id()
         if 'langagent' in self.protocols():
+            self.vocab_load()
             self.__delegate.language_ready()
 
     def inject(self,msg):
@@ -262,9 +246,83 @@ class LanguageProxy(proxy.AtomProxy):
     def node_removed(self):
         self.__delegate.language_gone()
 
+    @async.coroutine('internal error')
+    def __load_vocab(self):
+        print 'loading vocabulary'
+        self.__lexicon = pibelcanto.lexicon.lexicon.copy()
+        self.__reverse = pibelcanto.lexicon.reverse_lexicon.copy()
+
+        newlex = {}
+        newrev = {}
+        timestamp = ''
+        lexsize = 0
+
+        while True:
+            r = self.invoke_rpc('lexicon',str(lexsize))
+            yield r
+
+            if not r.status():
+                yield async.Coroutine.failure('cannot load lexicon')
+
+            (t,l,x) = r.args()[0].split(':')
+
+            if timestamp and t!=timestamp:
+                lexsize = 0
+                newlex = {}
+                newrev = {}
+                timestamp = t
+                continue
+
+            words = logic.parse_termlist(x)
+
+            if not words:
+                break
+
+            for w in words:
+                newlex[w.pred] = w.args
+                newrev[w.args[0]] = (w.pred,w.args[1])
+
+            lexsize = len(newlex)
+
+            if lexsize >= l:
+                break
+
+        print 'loaded vocabulary'
+        for (e,(m,c)) in newlex.iteritems():
+            print '%s -> %s %s' % (e,m,c)
+
+        self.__lexicon.update(newlex)
+        self.__reverse.update(newrev)
+
+
+    def get_reverse_lexicon(self):
+        return self.__reverse
+
+    def get_lexicon(self):
+        return self.__lexicon
+
+    def vocab_load(self):
+        print 'vocab changed, reloading'
+        self.__loader = self.__load_vocab()
+
+        def done(*args,**kwds):
+            print 'vocab load complete',args,kwds
+            self.__loader = None
+            self.__delegate.lexicon_changed()
+
+        self.__loader.setCallback(done).setErrback(done)
+
     def node_changed(self,parts):
-        self.node_removed()
-        self.node_ready()
+        if 'protocols' in parts:
+            self.node_removed()
+            self.node_ready()
+            return
+
+        if 'timestamp' in parts:
+            self.vocab_load()
+
+    def lexicon_changed(self):
+        pass
 
     def language_ready(self):
         pass

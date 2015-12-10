@@ -24,12 +24,36 @@
 #include <piw/piw_tsd.h>
 #include <piw/piw_ufilter.h>
 #include <piw/piw_status.h>
+#include <piw/piw_aggregator.h>
+#include <piw/piw_keys.h>
 #include <picross/pic_float.h>
 
 #include <vector>
 #include <math.h>
 #include <sstream>
 
+
+namespace
+{
+    class sfunc_t;
+    class ctlfunc_t;
+}
+
+static float __step(float x)
+{
+    if(x <= -0.5)
+        return -1.0;
+    if(x < 0.5)
+        return 0.0;
+    return 1.0;
+}
+
+pic::f2f_t piw::step_bucket() { return pic::f2f_t::callable(__step); }
+
+
+/**
+ * scaler_controller_t
+ */
 
 void piw::scaler_controller_t::parsevector(const std::string &s, pic::lckvector_t<float>::nbtype *v, unsigned sizehint)
 {
@@ -68,14 +92,9 @@ void piw::scaler_controller_t::tuple2vector(const data_nb_t &t, pic::lckvector_t
     }
 }
 
-namespace
-{
-    class sfunc_t;
-}
-
 struct piw::scaler_controller_t::impl_t: piw::ufilterctl_t, piw::ufilter_t, virtual pic::lckobject_t
 {
-    impl_t(): ufilter_t(this,0)
+    impl_t(const cookie_t &l): ufilter_t(this,l)
     {
         common_scales_.resize(8);
         common_scales_[0]=pic::ref(new scaler_controller_t::scale_t("[0,2,4,5,7,9,11,12]"));
@@ -89,13 +108,17 @@ struct piw::scaler_controller_t::impl_t: piw::ufilterctl_t, piw::ufilter_t, virt
     }
 
     ufilterfunc_t *ufilterctl_create(const piw::data_t &);
+    void ufilterctl_delete(ufilterfunc_t *f);
+
     unsigned long long ufilterctl_inputs() { return SIG1(1); }
-    unsigned long long ufilterctl_outputs() { return 0ULL; }
+    unsigned long long ufilterctl_outputs() { return SIG1(1); }
     unsigned long long ufilterctl_thru() { return 0ULL; }
 
     void control_changed(const piw::data_nb_t &id);
     void add_subscriber(scaler_subscriber_t *s) { subscribers_.push_back(s); }
     void del_subscriber(scaler_subscriber_t *s) { subscribers_.remove(s); }
+
+    void update_lights(const piw::data_nb_t &id, piw::scaler_controller_t::sref_t scale, float mode, bool override);
 
     scaler_controller_t::bits_t bits(const piw::data_nb_t &id)
     {
@@ -180,6 +203,7 @@ struct piw::scaler_controller_t::impl_t: piw::ufilterctl_t, piw::ufilter_t, virt
     pic::lckmap_t<piw::data_nb_t,float,piw::path_less>::nbtype oct_;
     pic::lckmap_t<piw::data_nb_t,sref_t,piw::path_less>::nbtype scale_;
     pic::lckmap_t<piw::data_nb_t,lref_t,piw::path_less>::nbtype layout_;
+    pic::lckmap_t<piw::data_nb_t,ctlfunc_t*,piw::path_less>::nbtype func_;
 
     pic::lckvector_t<sref_t>::nbtype common_scales_;
     pic::lcklist_t<scaler_subscriber_t *>::nbtype subscribers_;
@@ -189,14 +213,24 @@ namespace
 {
     struct ctlfunc_t: piw::ufilterfunc_t
     {
-        ctlfunc_t(piw::scaler_controller_t::impl_t *i): impl_(i)
+        ctlfunc_t(piw::scaler_controller_t::impl_t *i): impl_(i), env_(0)
         {
         }
 
         void ufilterfunc_start(piw::ufilterenv_t *e,const piw::data_nb_t &id)
         {
             PIC_ASSERT(id.is_path());
+
             id_ = id;
+            env_ = e;
+
+            prev_notes_ = "";
+            prev_offsets_ = piw::makenull_nb();
+            prev_lengths_ = piw::makenull_nb();
+            prev_mode_ = -100;
+            prev_lights_ = piw::makenull_nb();
+
+            impl_->func_.insert(std::make_pair(id_,this));
             e->ufilterenv_start(id.time());
         }
 
@@ -204,6 +238,8 @@ namespace
         {
             if(sig!=1) return;
             if(!d.is_dict()) return;
+
+            PIC_ASSERT(env_ == e);
 
             pic::lckmap_t<piw::data_nb_t,float,piw::path_less>::nbtype::iterator ti;
             pic::lckmap_t<piw::data_nb_t,float,piw::path_less>::nbtype::iterator bi;
@@ -244,11 +280,14 @@ namespace
 
         void ufilterfunc_end(piw::ufilterenv_t *, unsigned long long)
         {
+            env_ = 0;
+
             pic::lckmap_t<piw::data_nb_t,float,piw::path_less>::nbtype::iterator ti;
             pic::lckmap_t<piw::data_nb_t,float,piw::path_less>::nbtype::iterator bi;
             pic::lckmap_t<piw::data_nb_t,float,piw::path_less>::nbtype::iterator oi;
             pic::lckmap_t<piw::data_nb_t,piw::scaler_controller_t::sref_t,piw::path_less>::nbtype::iterator si;
             pic::lckmap_t<piw::data_nb_t,piw::scaler_controller_t::lref_t,piw::path_less>::nbtype::iterator li;
+            pic::lckmap_t<piw::data_nb_t,ctlfunc_t*,piw::path_less>::nbtype::iterator fi;
 
             ti = impl_->tonic_.find(id_);
             if(ti!=impl_->tonic_.end()) impl_->tonic_.erase(ti);
@@ -265,11 +304,81 @@ namespace
             li = impl_->layout_.find(id_);
             if(li!=impl_->layout_.end()) impl_->layout_.erase(li);
 
+            fi = impl_->func_.find(id_);
+            if(fi!=impl_->func_.end()) impl_->func_.erase(fi);
+
             id_ = piw::data_nb_t();
+        }
+
+        void update_lights(piw::scaler_controller_t::sref_t scale, float mode, bool override)
+        {
+            if(!env_) return;
+
+            piw::scaler_controller_t::bits_t b(impl_->bits(id_));
+            if(b.bits&BLAYOUT)
+            {
+                piw::scaler_controller_t::lref_t l=b.layout;
+                piw::scaler_controller_t::sref_t s=scale;
+                float m=mode;
+
+                if(!override)
+                {
+                    if(b.bits&BSCALE) s=b.scale;
+                    if(b.bits&BBASE)  m=b.base;
+                }
+
+                if(l.isvalid() && s.isvalid() &&
+                   (s->definition_.compare(prev_notes_) != 0 ||
+                    prev_offsets_.compare(l->offsets_definition_, false) != 0 ||
+                    prev_lengths_.compare(l->lengths_definition_, false) != 0 ||
+                    m != prev_mode_))
+                {
+                    unsigned scale_size = s->size()-1;
+
+                    pic::lckset_t<piw::statusdata_t>::nbtype status;
+
+                    if(scale_size > 0)
+                    {
+                        float key_offset = 0.0;
+                        float note_offset = 0.0;
+
+                        for(unsigned c=0; c<b.layout->courses(); c++)
+                        {
+                            for(int k=0; k<int(b.layout->length(c)); k++)
+                            {
+                                l->offsets(c,key_offset,note_offset);
+                                if(0 == abs(k+int(key_offset+m))%scale_size)
+                                {
+                                    status.insert(piw::statusdata_t(true,piw::coordinate_t(c+1,k+1),1));
+                                }
+                            }
+                        }
+                    }
+
+                    piw::data_nb_t buffer = piw::statusbuffer_t::make_statusbuffer(status);
+                    if(buffer.compare(prev_lights_,false) != 0)
+                    {
+                        env_->ufilterenv_output(1,buffer);
+                    }
+
+                    prev_notes_ = s->definition_;
+                    prev_offsets_ = l->offsets_definition_;
+                    prev_lengths_ = l->lengths_definition_;
+                    prev_mode_ = m;
+                    prev_lights_ = buffer;
+                }
+            }
         }
 
         piw::data_nb_t id_;
         piw::scaler_controller_t::impl_t *impl_;
+        piw::ufilterenv_t *env_;
+
+        std::string prev_notes_;
+        piw::data_nb_t prev_offsets_;
+        piw::data_nb_t prev_lengths_;
+        float prev_mode_;
+        piw::data_nb_t prev_lights_;
     };
 }
 
@@ -278,7 +387,34 @@ piw::ufilterfunc_t *piw::scaler_controller_t::impl_t::ufilterctl_create(const pi
     return new ctlfunc_t(this);
 }
 
-piw::scaler_controller_t::scaler_controller_t(): impl_(new impl_t())
+void piw::scaler_controller_t::impl_t::ufilterctl_delete(ufilterfunc_t *f)
+{
+    if(f)
+    {
+        delete f;
+    }
+}
+
+void piw::scaler_controller_t::impl_t::update_lights(const piw::data_nb_t &id, piw::scaler_controller_t::sref_t scale, float mode, bool override)
+{
+    const unsigned char *p = id.as_path();
+    int l = id.as_pathlen();
+
+    for(;l>=0;l--)
+    {
+        piw::data_nb_t d  = piw::makepath_nb(p,l);
+
+        pic::lckmap_t<piw::data_nb_t,ctlfunc_t*,piw::path_less>::nbtype::iterator fi;
+        fi=func_.find(d);
+        if(fi!=func_.end())
+        {
+            fi->second->update_lights(scale,mode,override);
+            return;
+        }
+    }
+}
+
+piw::scaler_controller_t::scaler_controller_t(const cookie_t &l): impl_(new impl_t(l))
 {
 }
 
@@ -292,9 +428,24 @@ piw::cookie_t piw::scaler_controller_t::cookie()
     return impl_->cookie();
 }
 
+void piw::scaler_controller_t::impl_t::control_changed(const piw::data_nb_t &id)
+{
+    pic::lcklist_t<scaler_subscriber_t *>::nbtype::iterator i;
+
+    for(i=subscribers_.begin(); i!=subscribers_.end(); i++)
+    {
+        (*i)->control_changed(id);
+    }
+}
+
+
+/**
+ * scaler_t
+ */
+
 struct piw::scaler_t::impl_t: piw::scaler_subscriber_t, piw::ufilterctl_t, piw::ufilter_t, pic::lckobject_t
 {
-    impl_t(piw::scaler_controller_t *sc,const piw::cookie_t &c,const cookie_t &l,const pic::f2f_t &b);
+    impl_t(piw::scaler_controller_t *sc,const piw::cookie_t &c,const pic::f2f_t &b);
 
     ufilterfunc_t *ufilterctl_create(const piw::data_t &);
     virtual void ufilterctl_delete(ufilterfunc_t *f);
@@ -316,7 +467,6 @@ struct piw::scaler_t::impl_t: piw::scaler_subscriber_t, piw::ufilterctl_t, piw::
 
     piw::scaler_controller_t *controller_;
     pic::flipflop_functor_t<pic::f2f_t> bend_;
-    piw::statusbuffer_t statusbuffer_;
 };
 
 namespace
@@ -325,13 +475,41 @@ namespace
     {
         sfunc_t(piw::scaler_t::impl_t *p) : parent_(p), time_(0)
         {
-            krange_=1;
-            grange_=12;
             tonic_=0;
             octave_=3;
             roctave_=0;
             mode_=0;
             scale_=parent_->controller_->common_scale_at(0);
+            override_=false;
+
+            krange_=1;
+            grange_=12;
+
+            valid_key_ = false;
+            keynum_=-1.0;
+            keycourse_=-1.0;
+
+            modifier_=0.0;
+            kbend_=0.0;
+            gbend_=0.0;
+            note_=-1.0;
+            note_hz_=0.0;
+            kbend_note_=0.0;
+            gbend_note_=0.0;
+            mbend_note_=0.0;
+
+            dirty_=false;
+        }
+
+        ~sfunc_t()
+        {
+        }
+
+        void setmodifier(const piw::data_nb_t &v)
+        {
+            modifier_=v.as_renorm_float(BCTUNIT_STEPS,-96,96,0);
+            time_ = std::max(time_,v.time());
+            //pic::logmsg() << "kbend = " << kbend_ << " time " << time_;
         }
 
         void setkbend(const piw::data_nb_t &v)
@@ -361,59 +539,40 @@ namespace
 
         void setkey(const piw::data_nb_t &v)
         {
-            if(v.is_tuple() && 4 == v.as_tuplelen())
+            float course,key;
+            if(piw::decode_key(v,0,0,&course,&key))
             {
-                piw::data_nb_t v2(v.as_tuple_value(3));
-
-                if(v2.is_tuple() && v2.as_tuplelen()==2)
-                {
-                    keycourse_ = v2.as_tuple_value(0).as_float()-1.0;
-                    keynum_ = v2.as_tuple_value(1).as_float()-1.0;
-                    time_ = std::max(time_,v.time());
-                }
+                valid_key_ = true;
+                keycourse_ = course-1.0;
+                keynum_ = key-1.0;
+                time_ = std::max(time_,v.time());
             }
-        }
-
-        void setkeynumber(const piw::data_nb_t &v)
-        {
-            keynum_= v.as_renorm_float(0,1000,0)-1;
-            keycourse_ = 0;
-            time_ = std::max(time_,v.time());
-#if SCALER_DEBUG>0
-            pic::logmsg() << "keynum override " << keycourse_ << ':' << keynum_;
-#endif // SCALER_DEBUG>0
         }
 
         void ufilterfunc_start(piw::ufilterenv_t *e,const piw::data_nb_t &id)
         {
             //e->ufilterenv_dump(false);
-            id_=id;
+
+            id_ = id;
             time_ = id.time();
 
 #if SCALER_DEBUG>0
-            pic::logmsg() << "------- scaler start" << time_;
+            pic::logmsg() << "------- scaler start " << time_;
 #endif // SCALER_DEBUG>0
 
+            valid_key_ = false;
+            keynum_ = -1.0;
+            keycourse_ = -1.0;
+
             piw::data_nb_t d;
-
-            if(e->ufilterenv_latest(SCALER_KEY,d,time_) && d.is_tuple() && 4 == d.as_tuplelen())
+            if(e->ufilterenv_latest(SCALER_KEY,d,time_))
             {
-                piw::data_nb_t v2(d.as_tuple_value(3));
-
-                if(v2.is_tuple() && v2.as_tuplelen()==2)
-                {
-                    keynum_=v2.as_tuple_value(1).as_float()-1.0;
-                    keycourse_=v2.as_tuple_value(0).as_float()-1.0;
-                }
-            }
-            else
-            {
-                keynum_=-1.0;
-                keycourse_=0.0;
+                setkey(d);
             }
 
             kbend_=0;
             gbend_=0;
+            modifier_=0;
             override_=false;
 
             if(e->ufilterenv_latest(SCALER_OVERRIDE,d,time_)) setoverride(d);
@@ -426,15 +585,16 @@ namespace
             if(e->ufilterenv_latest(SCALER_GBEND,d,time_)) setgbend(d);
             if(e->ufilterenv_latest(SCALER_KRANGE,d,time_)) setkrange(d);
             if(e->ufilterenv_latest(SCALER_GRANGE,d,time_)) setgrange(d);
-            if(e->ufilterenv_latest(SCALER_KNUMBER,d,time_)) setkeynumber(d);
+            if(e->ufilterenv_latest(SCALER_MODIFIER,d,time_)) setmodifier(d);
 
 #if SCALER_DEBUG>0
-            pic::logmsg() << "scaler start key: " << keynum_ << ':' << keycourse_;
+            pic::logmsg() << "scaler start valid: " << valid_key_ << " key: " << keynum_ << ':' << keycourse_;
 #endif // SCALER_DEBUG>0
 
             recalculate_note();
             recalculate_gbend();
             recalculate_kbend();
+            recalculate_modifier();
 
             time_ = id.time();
             e->ufilterenv_start(time_);
@@ -468,18 +628,23 @@ namespace
 
         void setscale(const piw::data_nb_t &d)
         {
-            if(d.is_string())
+            if(scale_data_.is_empty() || scale_data_.get().compare(d) != 0)
             {
-                scale_ = pic::ref(new piw::scaler_controller_t::scale_t(d.as_string()));
-            }
-            else if(!d.is_null())
-            {
-                unsigned n = (unsigned)(fabsf(d.as_norm())*parent_->controller_->common_scale_count());
-                scale_ = parent_->controller_->common_scale_at(n);
-            }
+                scale_data_.set_nb(d);
 
-            time_ = std::max(time_,d.time());
-            update_lights(id_);
+                if(d.is_string())
+                {
+                    scale_ = pic::ref(new piw::scaler_controller_t::scale_t(d.as_string()));
+                }
+                else if(!d.is_null())
+                {
+                    unsigned n = (unsigned)(fabsf(d.as_norm())*parent_->controller_->common_scale_count());
+                    scale_ = parent_->controller_->common_scale_at(n);
+                }
+
+                time_ = std::max(time_,d.time());
+                update_lights(id_);
+            }
         }
 
         void setroctave(const piw::data_nb_t &d)
@@ -507,26 +672,32 @@ namespace
 
         void ufilterfunc_data(piw::ufilterenv_t *env,unsigned sig,const piw::data_nb_t &d)
         {
-            // pic::logmsg() << "sfunc_t ufilterfunc_data sig=" << sig << " value=" << d << " time=" << d.time();
+            // pic::logmsg() << "sfunc_t::ufilterfunc_data sig=" << sig << " value=" << d << " time=" << d.time();
 
             bool nc=false;
             bool gc=false;
             bool kc=false;
+            bool mc=false;
 
             switch(sig)
             {
                 case SCALER_KEY: nc=true; setkey(d); break;
-                case SCALER_KNUMBER: nc=true; setkeynumber(d); break;
-                case SCALER_OVERRIDE: nc=true;  setoverride(d); break;
+                case SCALER_OVERRIDE: nc=true; setoverride(d); break;
                 case SCALER_GBEND: gc=true; setgbend(d); break;
                 case SCALER_GRANGE: gc=true; setgrange(d); break;
                 case SCALER_KBEND: kc=true; setkbend(d); break;
                 case SCALER_KRANGE: kc=true; setkrange(d); break;
+                case SCALER_MODIFIER: mc=true; setmodifier(d); break;
             }
 
             if(nc)
             {
                 recalculate_note();
+            }
+
+            if(mc)
+            {
+                recalculate_modifier();
             }
 
             if(gc)
@@ -549,50 +720,13 @@ namespace
 
         void update_lights(const piw::data_nb_t &id)
         {
-            piw::scaler_controller_t::bits_t b(parent_->controller_->bits(id));
-            if(b.bits&BLAYOUT)
-            {
-                piw::scaler_controller_t::lref_t l=b.layout;
-                piw::scaler_controller_t::sref_t s=scale_;
-                float m=mode_;
-
-                if(!override_)
-                {
-                    if(b.bits&BSCALE) s=b.scale;
-                    if(b.bits&BBASE)  m=b.base;
-                }
-
-                if(l.isvalid() && s.isvalid())
-                {
-                    unsigned scale_size = s->size()-1;
-
-                    parent_->statusbuffer_.clear();
-
-                    if(scale_size > 0)
-                    {
-                        float key_offset = 0.0;
-                        float note_offset = 0.0;
-
-                        for(unsigned c=0; c<b.layout->courses(); c++)
-                        {
-                            for(unsigned k=0; k<b.layout->length(c); k++)
-                            {
-                                l->offsets(c,key_offset,note_offset);
-                                if(0 == (k+int(key_offset+m))%scale_size)
-                                {
-                                    parent_->statusbuffer_.set_status(true,c+1,k+1,1);
-                                }
-                            }
-                        }
-                    }
-
-                    parent_->statusbuffer_.send();
-                }
-            }
+            parent_->controller_->update_lights(id, scale_, mode_, override_);
         }
 
         void recalculate_note()
         {
+            if(!valid_key_) return;
+
             float t=tonic_,o=octave_,m=mode_;
 
             piw::scaler_controller_t::sref_t s=scale_;
@@ -624,7 +758,6 @@ namespace
 
             key_offset += (keynum_+m);
 
-
             int scale_size = s->size()-1;
             float ntave_size = s->at(scale_size);
 
@@ -642,7 +775,7 @@ namespace
                 offset = key_offset - (ntave*scale_size);
             }
 
-            //pic::logmsg() << "k=" << key_offset << " c=" << keycourse_ << " no=" << note_offset << " ss=" << scale_size << " sr=" << ntave_size << " tave=" << ntave << " offset=" << offset;
+            // pic::logmsg() << "t=" << t << " o=" << o << " k=" << key_offset << " c=" << keycourse_ << " no=" << note_offset << " ss=" << scale_size << " sr=" << ntave_size << " tave=" << ntave << " offset=" << offset << " roctave_=" << roctave_ << " scale interpolate=" << s->interpolate(offset);
 
             note_ = note_offset+t+12.0*(roctave_+o+1.0)+ntave_size*ntave+s->interpolate(offset);
 
@@ -660,7 +793,7 @@ namespace
             if(dirty_ && note_ >= 0 && note_hz_ > 0)
             {
                 dirty_ = false;
-                float bend = kbend_note_+gbend_note_;
+                float bend = mbend_note_+kbend_note_+gbend_note_;
                 float note = note_+bend;
                 env->ufilterenv_output(SCALER_SCALENOTE,piw::makefloat_bounded_nb(136,16,16,note,time_));
 
@@ -690,24 +823,36 @@ namespace
             dirty_ = true;
         }
 
+        void recalculate_modifier()
+        {
+            float mbend_note = modifier_;
+            if (mbend_note_ == mbend_note) return;
+            mbend_note_ = mbend_note;
+            dirty_ = true;
+        }
+
         float tonic_;
         float octave_;
         float roctave_;
         float mode_;
         piw::scaler_controller_t::sref_t scale_;
+        piw::dataholder_nb_t scale_data_;
         bool override_;
 
         float krange_,grange_;
 
+        bool valid_key_;
         float keynum_;
         float keycourse_;
 
+        float modifier_;
         float kbend_;
         float gbend_;
         float note_;
         float note_hz_;
         float kbend_note_;
         float gbend_note_;
+        float mbend_note_;
 
         bool dirty_;
         piw::data_nb_t id_;
@@ -733,9 +878,8 @@ void piw::scaler_t::impl_t::ufilterctl_delete(ufilterfunc_t *f)
     }
 }
 
-piw::scaler_t::impl_t::impl_t(piw::scaler_controller_t *sc,const piw::cookie_t &c,const cookie_t &l,const pic::f2f_t &b): ufilter_t(this,c), controller_(sc), bend_(b), statusbuffer_(piw::change_nb_t(),0,l)
+piw::scaler_t::impl_t::impl_t(piw::scaler_controller_t *sc,const piw::cookie_t &c,const pic::f2f_t &b): ufilter_t(this,c), controller_(sc), bend_(b)
 {
-    statusbuffer_.autosend(false);
 }
 
 void piw::scaler_t::set_bend_curve(const pic::f2f_t &b)
@@ -743,28 +887,7 @@ void piw::scaler_t::set_bend_curve(const pic::f2f_t &b)
     ctl_->bend_=b;
 }
 
-static float __step(float x)
-{
-    if(x <= -0.5)
-        return -1.0;
-    if(x < 0.5)
-        return 0.0;
-    return 1.0;
-}
-
-pic::f2f_t piw::step_bucket() { return pic::f2f_t::callable(__step); }
-
-void piw::scaler_controller_t::impl_t::control_changed(const piw::data_nb_t &id)
-{
-    pic::lcklist_t<scaler_subscriber_t *>::nbtype::iterator i;
-
-    for(i=subscribers_.begin(); i!=subscribers_.end(); i++)
-    {
-        (*i)->control_changed(id);
-    }
-}
-
-piw::scaler_t::scaler_t(piw::scaler_controller_t *sc,const piw::cookie_t &c,const cookie_t &l,const pic::f2f_t &b): ctl_(new impl_t(sc,c,l,b))
+piw::scaler_t::scaler_t(piw::scaler_controller_t *sc,const piw::cookie_t &c,const pic::f2f_t &b): ctl_(new impl_t(sc,c,b))
 {
 }
 
@@ -772,6 +895,7 @@ piw::scaler_t::~scaler_t()
 {
     delete ctl_;
 }
+
 
 int piw::scaler_t::gc_traverse(void *v,void *a) const { return ctl_->bend_.gc_traverse(v,a); }
 int piw::scaler_t::gc_clear() { return ctl_->bend_.gc_clear(); }
@@ -783,3 +907,4 @@ void piw::scaler_controller_t::del_subscriber(scaler_subscriber_t *s) { impl_->d
 unsigned piw::scaler_controller_t::common_scale_count() { return impl_->common_scales_.size(); }
 piw::scaler_controller_t::sref_t piw::scaler_controller_t::common_scale_at(unsigned i) { return impl_->common_scales_.at(i); }
 piw::scaler_controller_t::bits_t piw::scaler_controller_t::bits(const piw::data_nb_t &id) { return impl_->bits(id); }
+void piw::scaler_controller_t::update_lights(const piw::data_nb_t &id, piw::scaler_controller_t::sref_t scale, float mode, bool override) { impl_->update_lights(id, scale, mode, override); }

@@ -105,12 +105,14 @@ class BrowseAgent(atom.Null):
 
     def setTargetId(self,id):
         self.__t=id
+        print 'BrowseAgent: setTargetId to ',self.__t
         self.__setup_target()
 
 class BrowseModel:
     def __init__(self,agent):
         self.agent=agent
         self.proxy=None
+        self.new_proxy=None
         self.targetName=''
         self.numFiles=0
         self.numCollections=0
@@ -182,11 +184,33 @@ class BrowseModel:
     
     @async.coroutine()
     def ready(self,id):
-        print 'BrowseModel:ready'
-        if id==self.getTargetId():
+        print 'BrowseModel:ready id=',id
+        r = gui.defer_bg(self.new_proxy.enumerate,id,[])
+        yield r
+
+        if not r.status():
+            print 'Enumerate check failed on',id,'- browse target unchanged'
+            self.__updating=False
+        else:
+            print 'Enumerate check suceeded on', id
+
+            db = self.proxy
+            if db:
+                self.proxy = None
+                gui.call_bg_sync(db.removeAllListeners)
+                gui.call_bg_sync(db.shutdown)
+
+            self.proxy=self.new_proxy
+            self.setTargetId(id)
+            self.path=[]
+            self.add_update(upd_path)
             yield self.__get_name(id)
             yield self.__get_icon()
+            yield self.__get_directory_details(True)
             self.flush_updates()
+            self.__updating = False
+
+
 
     def __getBrowserName(self):
         return self.agent.parent.name
@@ -327,27 +351,8 @@ class BrowseModel:
         print 'BrowseModel: Attempt target change to',targetId,'from',self.getTargetId()
 
         if self.proxy is None or (targetId !=self.getTargetId()):
-            proxy=gui.call_bg_sync(self.__create_browse_proxy,targetId)
-            r = gui.defer_bg(proxy.enumerate,targetId,[])
-            yield r
-
-            if not r.status():
-                print 'Enumerate check failed on',targetId,'- browse target unchanged'
-                self.__updating=False
-            else:
-
-                db = self.proxy
-                if db:
-                    self.proxy = None
-                    gui.call_bg_sync(db.removeAllListeners)
-                    gui.call_bg_sync(db.shutdown)
-
-                self.proxy=proxy
-                self.setTargetId(targetId)
-                self.path=[]
-                yield self.__get_directory_details(True)
-                self.__updating = False
-
+            self.new_proxy=gui.call_bg_sync(self.__create_browse_proxy,targetId)
+            # proxy calls ready() when its ready
         else:
             self.path=[]
             yield self.__get_directory_details(True)
@@ -359,6 +364,10 @@ class BrowseModel:
 
     @async.coroutine('internal error')
     def __get_name(self,targetId):    
+        if self.proxy is None:
+            print '__get_name: proxy is None - returning'
+            return
+            
         db=self.proxy
         r=gui.defer_bg(db.getName,targetId)
         yield r
@@ -366,6 +375,7 @@ class BrowseModel:
         if r.status():
             (self.targetName,) = r.args()
         self.add_update(upd_title)
+        print 'get_name',self.targetName
 
     @async.coroutine('internal error')
     def __get_directory_details(self,flush):
@@ -385,6 +395,9 @@ class BrowseModel:
 
     @async.coroutine('internal error')
     def __get_cinfo(self,id,path,start,ncolls):
+        if self.proxy is None:
+            return
+
         r = gui.defer_bg(self.proxy.cinfo,id,path,start,ncolls)
 
         yield r
@@ -418,6 +431,9 @@ class BrowseModel:
 
     @async.coroutine('internal error')
     def __get_dinfo(self,id,path):
+        if self.proxy is None:
+            return
+
         r = gui.defer_bg(self.proxy.dinfo,id,path)
 
         yield r
@@ -452,6 +468,9 @@ class BrowseModel:
 
     @async.coroutine('internal error')
     def __get_finfo(self,id,path):
+        if self.proxy is None:
+            return
+
         r = gui.defer_bg(self.proxy.finfo,id,path)
 
         yield r
@@ -482,6 +501,9 @@ class BrowseModel:
 
     @async.coroutine('internal error')
     def __enumerate(self,id,path):
+        if self.proxy is None:
+            return
+
         r = gui.defer_bg(self.proxy.enumerate,id,path)
 
         yield r
@@ -506,6 +528,9 @@ class BrowseModel:
 
     @async.coroutine('internal error')
     def __get_current(self,id):
+        if self.proxy is None:
+            return
+
         r = gui.defer_bg(self.proxy.current,id)
 
         yield r
@@ -533,6 +558,9 @@ class BrowseModel:
 
     @async.coroutine('internal error')
     def __check_enumerate(self,id,path):
+        if self.proxy is None:
+            return
+
         r = gui.defer_bg(self.proxy.enumerate,id,path)
 
         yield r
@@ -554,6 +582,9 @@ class BrowseModel:
 
     @async.coroutine('internal error')
     def __get_icon(self):
+        if self.proxy is None:
+            return
+
         r = gui.defer_bg(self.proxy.get_icon)
         yield r
         self.icon=None

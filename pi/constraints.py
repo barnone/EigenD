@@ -151,6 +151,65 @@ def constraint_timespec_1(db,c,objects):
 
     return matches
 
+def __partition(words):
+    numbers = []
+    text = [[]]
+
+    for w in words:
+        if is_number(w):
+            numbers.append(w)
+            if text[-1]:
+                text.append([])
+        else:
+            text[-1].append(w)
+
+    if not text[-1]:
+        text.pop()
+
+    return (text,numbers)
+
+def __constraint_coord(db,c,objects):
+    matches = []
+    tag = c.args[0]
+    dimensions = len(c.args[1:])
+    dimensionsets = [ (i,set(a)) for i,a in enumerate(c.args[1:]) ]
+    dimensionresults = [ None for i in dimensionsets ]
+
+    for r in objects:
+        if not logic.is_pred(r,'abstract'):
+            continue
+
+        (w,n) = __partition(r.args[0])
+
+        if len(w) != dimensions or len(n) != dimensions:
+            continue
+
+        for (wx,nx) in zip(w,n):
+            wxs = set(wx)
+            for (di,ds) in dimensionsets:
+                if ds == wxs:
+                    dimensionresults[di] = nx
+                    break
+
+        if None in dimensionresults:
+            continue
+
+        matches.append(logic.make_term('abstract',(tag,)+tuple(dimensionresults)))
+
+    return matches
+
+def constraint_coord_2(db,c,objects):
+    return __constraint_coord(db,c,objects)
+
+def constraint_coord_3(db,c,objects):
+    return __constraint_coord(db,c,objects)
+
+def constraint_coord_4(db,c,objects):
+    return __constraint_coord(db,c,objects)
+
+def constraint_coord_5(db,c,objects):
+    return __constraint_coord(db,c,objects)
+
 def constraint_mass_1(db,c,objects):
     wordlist = set(c.args[0])
     matches = []
@@ -214,6 +273,20 @@ def constraint_descriptor(db,c,objects):
         if logic.is_pred(r,'cnc'):
             matches.append(T('dsc',r.args[0],''))
             continue
+
+    return matches
+
+def constraint_cmpdsc_1(db,c,objects):
+    matches = []
+    req_id = c.args[0]
+
+    for r in objects:
+        if logic.is_pred_arity(r,'cmp',1,1):
+            dsc = r.args[0]
+            if logic.is_list(dsc) and len(dsc)==1:
+                dsc = dsc[0]
+                if logic.is_pred_arity(dsc,'dsc',2,2) and dsc.args[0]==req_id:
+                    matches.append(r)
 
     return matches
 
@@ -467,6 +540,30 @@ def constraint_ideal_1(db,c,objects):
     yield async.Coroutine.success(matches)
             
 @async.coroutine('internal error')
+def constraint_issubjectextended_3(db,c,objects):
+    verb = c.args[0]   # ie 'create'
+    croles = dict((a.args[0],a.args[1]) for a in c.args[2])  # ie '[role(by,[cnc(~self)])]'
+    rr = c.args[1]
+    matches = []
+
+    for o in objects:
+        print 'issubjectextended',verb,o
+        for r in db.search_key('RROLES',T('db_relation',verb,o,V('RROLES'))):
+            print 'r=',r
+            rroles = dict((a.args[0],a.args[1]) for a in r)
+            cr = (yield resolve_constraints_dict(db,croles,rroles))
+            print 'found',o,croles,rroles,cr.status()
+            if not cr.status() or not cr.args()[0]:
+                continue
+
+            if rr not in cr.args()[1]:
+                continue
+
+            matches.append(T('cmp',(o,)+cr.args()[1][rr]))
+
+    yield async.Coroutine.success(matches)
+
+@async.coroutine('internal error')
 def constraint_issubject_2(db,c,objects):
     verb = c.args[0]   # ie 'create'
     croles = dict((a.args[0],a.args[1]) for a in c.args[1])  # ie '[role(by,[cnc(~self)])]'
@@ -476,10 +573,10 @@ def constraint_issubject_2(db,c,objects):
         print 'issubject',verb,o
         for r in db.search_key('RROLES',T('db_relation',verb,o,V('RROLES'))):
             rroles = dict((a.args[0],a.args[1]) for a in r)
-            cr = (yield resolve_constraints_dict(db,rroles,croles))
-            print 'found',o,croles,rroles,cr.status()
+            cr = (yield resolve_constraints_dict(db,croles,rroles))
             if not cr.status() or not cr.args()[0]:
                 continue
+            print 'found',o,croles,rroles,cr.args()[1]
             matches.append(o)
             break
 

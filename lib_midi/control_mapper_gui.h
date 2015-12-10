@@ -62,18 +62,10 @@ namespace midi
         clearall_t clearall_;
         get_settings_t get_settings_;
         change_settings_t change_settings_;
-        set_channel_t set_midi_channel_;
-        set_channel_t set_min_channel_;
-        set_channel_t set_max_channel_;
-        get_channel_t get_midi_channel_;
-        get_channel_t get_min_channel_;
-        get_channel_t get_max_channel_;
 
-        static settings_functors_t init(clearall_t c, get_settings_t g, change_settings_t s,
-            set_channel_t sch, set_channel_t smi, set_channel_t sma,
-            get_channel_t gch, get_channel_t gmi, get_channel_t gma)
+        static settings_functors_t init(clearall_t c, get_settings_t g, change_settings_t s)
         {
-            const settings_functors_t functors = {c,g,s,sch,smi,sma,gch,gmi,gma};
+            const settings_functors_t functors = {c,g,s};
             return functors;
         }
     };
@@ -91,12 +83,6 @@ namespace midi
             void change_settings(global_settings_t);
             global_settings_t get_settings();
             void settings_changed();
-            unsigned get_midi_channel();
-            void set_midi_channel(unsigned);
-            unsigned get_min_channel();
-            void set_min_channel(unsigned);
-            unsigned get_max_channel();
-            void set_max_channel(unsigned);
 
         private:
             void clearall();
@@ -190,17 +176,23 @@ namespace midi
             void edit_resolution(bool edit) { edit_resolution_ = edit; };
             bool edit_resolution() { return edit_resolution_; }
 
+            void span_poly(bool span) { span_poly_ = span; };
+            bool span_poly() { return span_poly_; }
+
         protected:
             friend class mapper_table_t;
             friend class mapper_midi_cc_table_t;
             friend class mapper_midi_behaviour_table_t;
 
             void draw_text();
+            bool is_spanned();
+            void colour_cell(mapping_info_t &, bool);
 
             mapper_table_t &mapper_;
             bool edit_control_scope_;
             bool edit_fixed_channel_;
             bool edit_resolution_;
+            bool span_poly_;
             juce::Label *label_;
             int iparam_;
             int oparam_;
@@ -256,6 +248,15 @@ namespace midi
             mapper_table_t &mapper_;
     };
 
+    class MIDILIB_DECLSPEC_CLASS mapper_tablelistbox_t: public juce::TableListBox
+    {
+        public:
+            mapper_tablelistbox_t(const juce::String &, juce::TableListBoxModel *);
+            
+            void mouseWheelMove(const juce::MouseEvent &, float, float);
+            void delegatedMouseWheelMove(const juce::MouseEvent &, float, float);
+    };
+
     class MIDILIB_DECLSPEC_CLASS mapper_table_t: public juce::Component, public juce::Button::Listener, public virtual pic::tracked_t
     {
         public:
@@ -293,8 +294,8 @@ namespace midi
             mapping_functors_t mapping_functors_;
             header_table_model_t header_table_model_;
             mapping_table_model_t mapping_table_model_;
-            juce::TableListBox *table_header_;
-            juce::TableListBox *table_mapping_;
+            mapper_tablelistbox_t *table_header_;
+            mapper_tablelistbox_t *table_mapping_;
             juce::TextButton *help_button_;
             ClearTabButton *clear_tab_;
             juce::Font font_;

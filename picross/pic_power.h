@@ -28,6 +28,7 @@ namespace pic
     PIC_DECLSPEC_FUNC(void) display_active(void);
     PIC_DECLSPEC_FUNC(void) disk_active(void);
     PIC_DECLSPEC_FUNC(void) to_front(void);
+    PIC_DECLSPEC_FUNC(void) disable_powersaving(void);
 };
 
 #endif

@@ -25,7 +25,6 @@
 #include <picross/pic_time.h>
 #include <picross/pic_log.h>
 #include <picross/pic_thread.h>
-#include <picross/pic_mlock.h>
 
 /*
  *  Synchronisation.  When a job is cancelled, the guarantee is that
@@ -90,6 +89,7 @@ template <class T> struct pia_eventq_impl_t
     void (*tcurrent_)(void *);
 
     void *icurrentctx_;
+    void *iccurrentctx_;
     void *icallcurrentctx_;
     void *fcurrentctx_;
     void *scurrentctx_;
@@ -392,6 +392,8 @@ template <class T> bool pia_eventq_impl_t<T>::run(unsigned long long now)
         {
             delete t;
         }
+        tcurrent_=0;
+        tcurrentctx_=0;
         a=true;
         safe_.run();
     }
@@ -407,17 +409,21 @@ restart:
         e->run();
         a=true;
         delete e;
+        fcurrent_=0;
+        fcurrentctx_=0;
         safe_.run();
     }
 
     if((ic=idlecall_.head())!=0)
     {
         iccurrent_=ic->cb_;
-        icurrentctx_=ic->ctx_;
+        iccurrentctx_=ic->ctx_;
         ic->remove();
         ic->run();
         a=true;
         delete ic;
+        iccurrent_=0;
+        iccurrentctx_=0;
         safe_.run();
         goto restart;
     }
@@ -430,6 +436,8 @@ restart:
         i->run();
         a=true;
         delete i;
+        icurrent_=0;
+        icurrentctx_=0;
         safe_.run();
         goto restart;
     }
@@ -442,6 +450,8 @@ restart:
         s->run();
         a=true;
         delete s;
+        scurrent_=0;
+        scurrentctx_=0;
         safe_.run();
         goto restart;
     }

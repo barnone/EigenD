@@ -29,8 +29,6 @@
 #include <picross/pic_flipflop.h>
 #include <picross/pic_atomic.h>
 #include <picross/pic_log.h>
-#include <piembedded/pie_iostream.h>
-#include <piembedded/pie_print.h>
 
 #include <string>
 #include <cstring>
@@ -40,9 +38,9 @@
 
 namespace piw
 {
+#ifdef DEBUG_DATA_ATOMICITY
     inline void data_atomicity_assertion(bct_data_t d)
     {
-#ifdef DEBUG_DATA_ATOMICITY
         if(d && d->tid && !pic_threadid_equal(d->tid, pic_current_threadid()))
         {
             std::stringstream oss;
@@ -50,13 +48,13 @@ namespace piw
             oss << d->tid;
             oss << "(data thread) != ";
             oss << pic_current_threadid();
-            oss << "(current thread) [";
-            pie_print(bct_data_wirelen(d), bct_data_wiredata(d), pie::ostreamwriter, &oss);
-            oss << "]";
+            oss << "(current thread)";
             PIC_THROW(oss.str().c_str());
         }
-#endif
     }
+#else
+    inline void data_atomicity_assertion(bct_data_t d) {}
+#endif
 
     inline void piw_data_incref_fast(bct_data_t d)
     {
@@ -65,7 +63,6 @@ namespace piw
 #ifdef DEBUG_DATA_ATOMICITY
             data_atomicity_assertion(d);
 #endif
-
             ++d->count;
         }
     }
@@ -156,7 +153,7 @@ namespace piw
             unsigned long long time() const { return bct_data_time(_rep); }
             unsigned long count() const { return bct_data_count(_rep); }
 
-            int compare_grist(const data_base_t &d) const;
+            int compare_event(const data_base_t &d) const;
             int compare(const data_base_t &d, bool ts=true) const;
             int compare_path(const data_base_t &d) const;
             int compare_path_beginning(const data_base_t &d) const;
@@ -214,9 +211,9 @@ namespace piw
             bool as_bool() const { PIC_ASSERT(is_bool()); return *(char *)host_data(); }
             const unsigned char *as_path() const { PIC_ASSERT(is_path()); return ((const unsigned char *)host_data())+1; }
             unsigned as_pathlen() const { PIC_ASSERT(is_path()); return host_length()-1; }
-            unsigned as_pathchafflen() const { PIC_ASSERT(is_path()); return *(unsigned char *)(host_data()); }
-            const unsigned char *as_pathgrist() const { PIC_ASSERT(is_path()); const unsigned char *p = (const unsigned char *)host_data(); unsigned c=*p; return &p[1+c]; }
-            unsigned as_pathgristlen() const { PIC_ASSERT(is_path()); const unsigned char *p = (const unsigned char *)host_data(); unsigned c=*p; return host_length()-1-c; }
+            unsigned as_pathchannellen() const { PIC_ASSERT(is_path()); return *(unsigned char *)(host_data()); }
+            const unsigned char *as_pathevent() const { PIC_ASSERT(is_path()); const unsigned char *p = (const unsigned char *)host_data(); unsigned c=*p; return &p[1+c]; }
+            unsigned as_patheventlen() const { PIC_ASSERT(is_path()); const unsigned char *p = (const unsigned char *)host_data(); unsigned c=*p; return host_length()-1-c; }
             const void *as_blob() const { PIC_ASSERT(is_blob()); return (const void *)host_data(); }
             unsigned as_bloblen() const { PIC_ASSERT(is_blob()); return host_length(); }
             std::string as_blob2() const { PIC_ASSERT(is_blob()); return std::string((const char *)host_data(),host_length()); }
@@ -398,7 +395,7 @@ namespace piw
 
     typedef std::map<std::string,data_t> datamap_t;
 
-    PIW_DECLSPEC_FUNC(bct_data_t) makecopy(unsigned nb, unsigned long long ts, bct_data_t &d);
+    PIW_DECLSPEC_FUNC(bct_data_t) makecopy(unsigned nb, unsigned long long ts, bct_data_t d);
 
     PIW_DECLSPEC_FUNC(data_t) makearray_ex(unsigned nb, unsigned long long ts, float ubound, float lbound, float rest, unsigned nfloats, float **pfloat, float **fs);
     PIW_DECLSPEC_FUNC(data_t) makenorm_ex(unsigned nb, unsigned long long ts, unsigned nfloats, float **pfloat,float **fs);
@@ -413,13 +410,14 @@ namespace piw
     PIW_DECLSPEC_FUNC(data_t) pathone_ex(unsigned nb, unsigned v, unsigned long long t);
     PIW_DECLSPEC_FUNC(data_t) pathprepend_ex(unsigned nb, const data_t &d, unsigned p);
     PIW_DECLSPEC_FUNC(data_t) pathtwo_ex(unsigned nb, unsigned v1, unsigned v2, unsigned long long t);
-    PIW_DECLSPEC_FUNC(data_t) pathprepend_grist_ex(unsigned nb, const data_t &d, unsigned p);
-    PIW_DECLSPEC_FUNC(data_t) pathappend_chaff_ex(unsigned nb, const data_t &d, unsigned p);
+    PIW_DECLSPEC_FUNC(data_t) pathprepend_event_ex(unsigned nb, const data_t &d, unsigned p);
+    PIW_DECLSPEC_FUNC(data_t) pathappend_channel_ex(unsigned nb, const data_t &d, unsigned p);
+    PIW_DECLSPEC_FUNC(data_t) pathappend_ex(unsigned nb, const data_t &d, unsigned p);
     PIW_DECLSPEC_FUNC(data_t) pathtruncate_ex(unsigned nb, const data_t &d);
     PIW_DECLSPEC_FUNC(data_t) pathpretruncate_ex(unsigned nb, const data_t &d);
     PIW_DECLSPEC_FUNC(data_t) pathpretruncate_ex(unsigned nb, const data_t &d,unsigned l);
-    PIW_DECLSPEC_FUNC(data_t) pathreplacegrist_ex(unsigned nb, const data_t &d, unsigned g);
-    PIW_DECLSPEC_FUNC(data_t) pathgristpretruncate_ex(unsigned nb, const data_t &d);
+    PIW_DECLSPEC_FUNC(data_t) pathreplaceevent_ex(unsigned nb, const data_t &d, unsigned g);
+    PIW_DECLSPEC_FUNC(data_t) patheventpretruncate_ex(unsigned nb, const data_t &d);
     PIW_DECLSPEC_FUNC(data_t) makeblob_ex(unsigned nb, unsigned long long ts, unsigned size, unsigned char **pdata);
     PIW_DECLSPEC_FUNC(data_t) makedouble_ex(unsigned nb, double v, unsigned long long t=0L);
     PIW_DECLSPEC_FUNC(data_t) makefloat_ex(unsigned nb, float v, unsigned long long t=0L);
@@ -438,19 +436,21 @@ namespace piw
     PIW_DECLSPEC_FUNC(data_t) tuplenull_ex(unsigned nb, unsigned long long t=0L);
     PIW_DECLSPEC_FUNC(data_t) tupledel_ex(unsigned nb, const data_t &d, unsigned i);
     PIW_DECLSPEC_FUNC(data_t) tupleadd_ex(unsigned nb, const data_t &d, const data_t &v);
+    PIW_DECLSPEC_FUNC(data_t) tuplenorm_ex(unsigned nb, const data_t &d, float norm);
 
     inline data_t makewire(unsigned dl, const unsigned char *dp) { return makewire_ex(PIC_ALLOC_NORMAL,dl,dp); }
     inline data_t pathnull(unsigned long long t) { return pathnull_ex(PIC_ALLOC_NORMAL,t); }
     inline data_t pathone(unsigned v, unsigned long long t) { return pathone_ex(PIC_ALLOC_NORMAL,v,t); }
     inline data_t pathprepend(const data_t &d, unsigned p) { return pathprepend_ex(PIC_ALLOC_NORMAL,d,p); }
     inline data_t pathtwo(unsigned v1, unsigned v2, unsigned long long t) { return pathtwo_ex(PIC_ALLOC_NORMAL,v1,v2,t); }
-    inline data_t pathprepend_grist(const data_t &d, unsigned p) { return pathprepend_grist_ex(PIC_ALLOC_NORMAL,d,p); }
-    inline data_t pathappend_chaff(const data_t &d, unsigned p) { return pathappend_chaff_ex(PIC_ALLOC_NORMAL,d,p); }
+    inline data_t pathprepend_event(const data_t &d, unsigned p) { return pathprepend_event_ex(PIC_ALLOC_NORMAL,d,p); }
+    inline data_t pathappend_channel(const data_t &d, unsigned p) { return pathappend_channel_ex(PIC_ALLOC_NORMAL,d,p); }
+    inline data_t pathappend(const data_t &d, unsigned p) { return pathappend_ex(PIC_ALLOC_NORMAL,d,p); }
     inline data_t pathtruncate(const data_t &d) { return pathtruncate_ex(PIC_ALLOC_NORMAL,d); }
     inline data_t pathpretruncate(const data_t &d) { return pathpretruncate_ex(PIC_ALLOC_NORMAL,d); }
     inline data_t pathpretruncate(const data_t &d,unsigned l) { return pathpretruncate_ex(PIC_ALLOC_NORMAL,d,l); }
-    inline data_t pathgristpretruncate(const data_t &d) { return pathgristpretruncate_ex(PIC_ALLOC_NORMAL,d); }
-    inline data_t pathreplacegrist(const data_t &d, unsigned g) { return pathreplacegrist_ex(PIC_ALLOC_NORMAL,d,g); }
+    inline data_t patheventpretruncate(const data_t &d) { return patheventpretruncate_ex(PIC_ALLOC_NORMAL,d); }
+    inline data_t pathreplaceevent(const data_t &d, unsigned g) { return pathreplaceevent_ex(PIC_ALLOC_NORMAL,d,g); }
     inline data_t dictnull(unsigned long long t) { return dictnull_ex(PIC_ALLOC_NORMAL,t); }
     inline data_t dictdel(const data_t &d, const std::string &k) { return dictdel_ex(PIC_ALLOC_NORMAL,d,k); }
     inline data_t dictset(const data_t &d, const std::string &k, const data_t &v) { return dictset_ex(PIC_ALLOC_NORMAL,d,k,v); }
@@ -458,6 +458,7 @@ namespace piw
     inline data_t tuplenull(unsigned long long t) { return tuplenull_ex(PIC_ALLOC_NORMAL,t); }
     inline data_t tupledel(const data_t &d, unsigned i) { return tupledel_ex(PIC_ALLOC_NORMAL,d,i); }
     inline data_t tupleadd(const data_t &d, const data_t &v) { return tupleadd_ex(PIC_ALLOC_NORMAL,d,v); }
+    inline data_t tuplenorm(const data_t &d, float norm) { return tuplenorm_ex(PIC_ALLOC_NORMAL,d,norm); }
     inline data_t makeblob(unsigned long long ts, unsigned size, unsigned char **pdata) { return makeblob_ex(PIC_ALLOC_NORMAL,ts,size,pdata); }
     inline data_t makeblob2(const std::string &s, unsigned long long ts) { unsigned char *p; data_t d(makeblob_ex(PIC_ALLOC_NORMAL,ts,s.size(),&p)); memcpy(p,s.c_str(),s.size()); return d; }
     inline data_t makedouble(double v, unsigned long long t=0L) { return makedouble_ex(PIC_ALLOC_NORMAL,v,t); }
@@ -492,13 +493,14 @@ namespace piw
     PIW_DECLSPEC_FUNC(data_nb_t) pathone_nb_ex(unsigned nb, unsigned v, unsigned long long t);
     PIW_DECLSPEC_FUNC(data_nb_t) pathprepend_nb_ex(unsigned nb, const data_nb_t &d, unsigned p);
     PIW_DECLSPEC_FUNC(data_nb_t) pathtwo_nb_ex(unsigned nb, unsigned v1, unsigned v2, unsigned long long t);
-    PIW_DECLSPEC_FUNC(data_nb_t) pathprepend_grist_nb_ex(unsigned nb, const data_nb_t &d, unsigned p);
-    PIW_DECLSPEC_FUNC(data_nb_t) pathappend_chaff_nb_ex(unsigned nb, const data_nb_t &d, unsigned p);
+    PIW_DECLSPEC_FUNC(data_nb_t) pathprepend_event_nb_ex(unsigned nb, const data_nb_t &d, unsigned p);
+    PIW_DECLSPEC_FUNC(data_nb_t) pathappend_channel_nb_ex(unsigned nb, const data_nb_t &d, unsigned p);
+    PIW_DECLSPEC_FUNC(data_nb_t) pathappend_nb_ex(unsigned nb, const data_nb_t &d, unsigned p);
     PIW_DECLSPEC_FUNC(data_nb_t) pathtruncate_nb_ex(unsigned nb, const data_nb_t &d);
     PIW_DECLSPEC_FUNC(data_nb_t) pathpretruncate_nb_ex(unsigned nb, const data_nb_t &d);
     PIW_DECLSPEC_FUNC(data_nb_t) pathpretruncate_nb_ex(unsigned nb, const data_nb_t &d,unsigned l);
-    PIW_DECLSPEC_FUNC(data_nb_t) pathreplacegrist_nb_ex(unsigned nb, const data_nb_t &d, unsigned g);
-    PIW_DECLSPEC_FUNC(data_nb_t) pathgristpretruncate_nb_ex(unsigned nb, const data_nb_t &d);
+    PIW_DECLSPEC_FUNC(data_nb_t) pathreplaceevent_nb_ex(unsigned nb, const data_nb_t &d, unsigned g);
+    PIW_DECLSPEC_FUNC(data_nb_t) patheventpretruncate_nb_ex(unsigned nb, const data_nb_t &d);
     PIW_DECLSPEC_FUNC(data_nb_t) makeblob_nb_ex(unsigned nb, unsigned long long ts, unsigned size, unsigned char **pdata);
     PIW_DECLSPEC_FUNC(data_nb_t) makedouble_nb_ex(unsigned nb ,double v, unsigned long long t=0L);
     PIW_DECLSPEC_FUNC(data_nb_t) makefloat_nb_ex(unsigned nb, float v, unsigned long long t=0L);
@@ -517,19 +519,21 @@ namespace piw
     PIW_DECLSPEC_FUNC(data_nb_t) tuplenull_nb_ex(unsigned nb, unsigned long long t=0L);
     PIW_DECLSPEC_FUNC(data_nb_t) tupledel_nb_ex(unsigned nb, const data_nb_t &d, unsigned i);
     PIW_DECLSPEC_FUNC(data_nb_t) tupleadd_nb_ex(unsigned nb, const data_nb_t &d, const data_nb_t &v);
+    PIW_DECLSPEC_FUNC(data_nb_t) tuplenorm_nb_ex(unsigned nb, const data_nb_t &d, float norm);
 
     inline data_nb_t makewire_nb(unsigned dl, const unsigned char *dp) { return makewire_nb_ex(PIC_ALLOC_NB,dl,dp); }
     inline data_nb_t pathnull_nb(unsigned long long t) { return pathnull_nb_ex(PIC_ALLOC_NB,t); }
     inline data_nb_t pathone_nb(unsigned v, unsigned long long t) { return pathone_nb_ex(PIC_ALLOC_NB,v,t); }
     inline data_nb_t pathprepend_nb(const data_nb_t &d, unsigned p) { return pathprepend_nb_ex(PIC_ALLOC_NB,d,p); }
     inline data_nb_t pathtwo_nb(unsigned v1, unsigned v2, unsigned long long t) { return pathtwo_nb_ex(PIC_ALLOC_NB,v1,v2,t); }
-    inline data_nb_t pathprepend_grist_nb(const data_nb_t &d, unsigned p) { return pathprepend_grist_nb_ex(PIC_ALLOC_NB,d,p); }
-    inline data_nb_t pathappend_chaff_nb(const data_nb_t &d, unsigned p) { return pathappend_chaff_nb_ex(PIC_ALLOC_NB,d,p); }
+    inline data_nb_t pathprepend_event_nb(const data_nb_t &d, unsigned p) { return pathprepend_event_nb_ex(PIC_ALLOC_NB,d,p); }
+    inline data_nb_t pathappend_nb(const data_nb_t &d, unsigned p) { return pathappend_nb_ex(PIC_ALLOC_NB,d,p); }
+    inline data_nb_t pathappend_channel_nb(const data_nb_t &d, unsigned p) { return pathappend_channel_nb_ex(PIC_ALLOC_NB,d,p); }
     inline data_nb_t pathtruncate_nb(const data_nb_t &d) { return pathtruncate_nb_ex(PIC_ALLOC_NB,d); }
     inline data_nb_t pathpretruncate_nb(const data_nb_t &d) { return pathpretruncate_nb_ex(PIC_ALLOC_NB,d); }
     inline data_nb_t pathpretruncate_nb(const data_nb_t &d,unsigned l) { return pathpretruncate_nb_ex(PIC_ALLOC_NB,d,l); }
-    inline data_nb_t pathgristpretruncate_nb(const data_nb_t &d) { return pathgristpretruncate_nb_ex(PIC_ALLOC_NB,d); }
-    inline data_nb_t pathreplacegrist_nb(const data_nb_t &d, unsigned g) { return pathreplacegrist_nb_ex(PIC_ALLOC_NB,d,g); }
+    inline data_nb_t patheventpretruncate_nb(const data_nb_t &d) { return patheventpretruncate_nb_ex(PIC_ALLOC_NB,d); }
+    inline data_nb_t pathreplaceevent_nb(const data_nb_t &d, unsigned g) { return pathreplaceevent_nb_ex(PIC_ALLOC_NB,d,g); }
     inline data_nb_t dictnull_nb(unsigned long long t) { return dictnull_nb_ex(PIC_ALLOC_NB,t); }
     inline data_nb_t dictdel_nb(const data_nb_t &d, const std::string &k) { return dictdel_nb_ex(PIC_ALLOC_NB,d,k); }
     inline data_nb_t dictset_nb(const data_nb_t &d, const std::string &k, const data_nb_t &v) { return dictset_nb_ex(PIC_ALLOC_NB,d,k,v); }
@@ -537,6 +541,7 @@ namespace piw
     inline data_nb_t tuplenull_nb(unsigned long long t) { return tuplenull_nb_ex(PIC_ALLOC_NB,t); }
     inline data_nb_t tupledel_nb(const data_nb_t &d, unsigned i) { return tupledel_nb_ex(PIC_ALLOC_NB,d,i); }
     inline data_nb_t tupleadd_nb(const data_nb_t &d, const data_nb_t &v) { return tupleadd_nb_ex(PIC_ALLOC_NB,d,v); }
+    inline data_nb_t tuplenorm_nb(const data_nb_t &d, float norm) { return tuplenorm_nb_ex(PIC_ALLOC_NB,d,norm); }
     inline data_nb_t makeblob_nb(unsigned long long ts, unsigned size, unsigned char **pdata) { return makeblob_nb_ex(PIC_ALLOC_NB,ts,size,pdata); }
     inline data_nb_t makedouble_nb(double v, unsigned long long t=0L) { return makedouble_nb_ex(PIC_ALLOC_NB,v,t); }
     inline data_nb_t makefloat_nb(float v, unsigned long long t=0L) { return makefloat_nb_ex(PIC_ALLOC_NB,v,t); }
@@ -607,16 +612,19 @@ namespace piw
             bool operator==(const dataholder_nb_t &d) const { return d.get()==get(); }
 
             void set_normal(const data_t &d);
-            void set_nb(const data_nb_t &d);
             void clear();
             bool is_empty();
-            const data_nb_t get() const;
+
+            void set_nb(const data_nb_t &d); //fast
+            void clear_nb(); //fast
+            const data_nb_t get() const; //fast
 
         private:
             static int copy_constructor__(void *self_, void *arg_);
             static int assignment__(void *self_, void *arg_);
             static int clear__(void *self_, void *arg_);
             static int set_normal__(void *self_, void *arg_);
+            static int set_nb__(void *self_, void *arg_);
 
             bct_data_t data_;
     };
@@ -664,9 +672,9 @@ namespace piw
         bool operator()(const data_base_t &a, const data_base_t &b) const { return a.compare_path_lexicographic(b)>0; }
     };
 
-    struct grist_less
+    struct event_less
     {
-        bool operator()(const data_base_t &a, const data_base_t &b) const { return a.compare_grist(b)<0; }
+        bool operator()(const data_base_t &a, const data_base_t &b) const { return a.compare_event(b)<0; }
     };
 
     struct notime_less
@@ -680,11 +688,11 @@ namespace piw
     };
 
     PIW_DECLSPEC_FUNC(d2d_nb_t) dict_merger(const data_t &override);
-}
 
 PIW_DECLSPEC_FUNC(std::ostream) &operator<<(std::ostream &o, const piw::dataholder_nb_t &d);
 PIW_DECLSPEC_FUNC(std::ostream) &operator<<(std::ostream &o, const piw::data_base_t &p);
 PIW_DECLSPEC_FUNC(std::ostream) &operator<<(std::ostream &o, const piw::fullprinter_t<piw::data_t> &p);
 PIW_DECLSPEC_FUNC(std::ostream) &operator<<(std::ostream &o, const piw::fullprinter_t<piw::data_nb_t> &p);
+};
 
 #endif

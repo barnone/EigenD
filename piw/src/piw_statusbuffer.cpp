@@ -26,57 +26,9 @@
 
 #define DEFAULT_BLINK_TIME 500
 
-namespace
-{
-    static inline void int2c(int r, unsigned char *o)
-    {
-        long k = r;
-
-        if(r<0) 
-        {
-            k = (int)0x10000+r;
-        }
-
-        o[0] = ((k>>8)&0xff);
-        o[1] = (k&0xff);
-    }
-
-    static inline void status2c(bool m, unsigned char s, unsigned char *o)
-    {
-        unsigned char r = s&0x7f;
-        if(m) r+=(1<<7);
-        *o = r;
-    }
-
-    struct statusdata_t
-    {
-        statusdata_t(const bool m, const int r, const int c): musical(m), row(r), col(c) {}
-
-        bool operator==(const statusdata_t &o) const
-        {
-            return musical == o.musical && row == o.row && col == o.col;
-        }
-
-        bool operator<(const statusdata_t &o) const
-        {
-            if(musical < o.musical) return true;
-            if(musical > o.musical) return false;
-            if(row < o.row) return true;
-            if(row > o.row) return false;
-            if(col < o.col) return true;
-            if(col > o.col) return false;
-            return false;
-        }
-
-        const bool musical;
-        const int row;
-        const int col;
-    };
-};
-
 struct piw::statusbuffer_t::impl_t: piw::event_data_source_real_t, piw::thing_t, virtual pic::tracked_t, virtual pic::lckobject_t
 {
-    impl_t(const piw::change_nb_t &s, unsigned ch, const piw::cookie_t &c): piw::event_data_source_real_t(piw::pathnull(0)), switch_(s), blinking_(false), override_(false), channel_(ch), blink_time_(DEFAULT_BLINK_TIME), blink_size_(0), autosend_(true)
+    impl_t(const piw::change_nb_t &s, unsigned ch, const piw::cookie_t &c): piw::event_data_source_real_t(piw::pathnull(0)), switch_(s), blinking_(false), override_(false), channel_(ch), blink_time_(DEFAULT_BLINK_TIME), autosend_(true)
     {
         piw::tsd_thing(this);
         root_.connect(c);
@@ -103,42 +55,25 @@ struct piw::statusbuffer_t::impl_t: piw::event_data_source_real_t, piw::thing_t,
 
     void send_statusbuffer_values()
     {
-        unsigned char *dp;
-        unsigned long long t = piw::tsd_time();
-        unsigned s = statusbuffer_.size()*5;
-
-        piw::data_nb_t result = makeblob_nb(t,s,&dp);
-
-        pic::lckmap_t<statusdata_t,unsigned char>::nbtype::iterator i;
-
-        for(i=statusbuffer_.begin(); i!=statusbuffer_.end(); i++)
-        {
-            int2c(i->first.row,dp+0);
-            int2c(i->first.col,dp+2);
-            status2c(i->first.musical,i->second,dp+4);
-            dp+=5;
-        }
-
-        buffer_.add_value(1,result);
+        buffer_.add_value(1,piw::statusbuffer_t::make_statusbuffer(statusbuffer_));
     }
 
     void send_blink_values()
     {
-        unsigned char *dp;
-        unsigned long long t = piw::tsd_time();
-        unsigned s = 5*blink_size_;
+        if(blink_geometry_.is_empty()) return;
 
-        piw::data_nb_t result = makeblob_nb(t,s,&dp);
+        pic::lckset_t<piw::statusdata_t>::nbtype blink;
 
-        for(unsigned n=1;n<=blink_size_;n++)
+        piw::data_nb_t geometry = blink_geometry_.get();
+        for(unsigned x=0;x<geometry.as_tuplelen();++x)
         {
-            int2c(0,dp+0);
-            int2c(n,dp+2);
-            status2c(false,BCTSTATUS_BLINK,dp+4);
-            dp+=5;
+            for(int y=0;y<geometry.as_tuple_value(x).as_long();++y)
+            {
+                blink.insert(piw::statusdata_t(false,piw::coordinate_t(x+1,y+1),BCTSTATUS_BLINK));
+            }
         }
 
-        buffer_.add_value(1,result);
+        buffer_.add_value(1,piw::statusbuffer_t::make_statusbuffer(blink));
     }
 
     static int send__(void *self_, void *arg_)
@@ -177,77 +112,77 @@ struct piw::statusbuffer_t::impl_t: piw::event_data_source_real_t, piw::thing_t,
         return 1;
     }
 
-    static int set_status__(void *self_, void *musical_, void *row_, void *col_, void *status_)
+    static int clear_status__(void *self_, void *musical_, void *coordinate_)
     {
         impl_t *self = (impl_t *)self_;
         bool musical = *(bool *)musical_;
-        int row = *(int *)row_;
-        int col = *(int *)col_;
-        unsigned char status = *(unsigned char *)status_;
+        piw::coordinate_t coordinate = *(piw::coordinate_t *)coordinate_;
 
-        pic::lckmap_t<statusdata_t,unsigned char>::nbtype::iterator i;
-
-        statusdata_t statusdata = statusdata_t(musical,row,col);
-
-        i = self->statusbuffer_.find(statusdata);
-
-        if(i==self->statusbuffer_.end())
-        {
-            if(status)
-            {
-                self->statusbuffer_.insert(std::make_pair(statusdata,status));
-
-                if(self->autosend_)
-                {
-                    self->send_statusbuffer_values();
-                }
-            }
-
-            return 1;
-        }
-
-        if(status==0)
-        {
-            self->statusbuffer_.erase(i);
-
-            if(self->autosend_)
-            {
-                self->send_statusbuffer_values();
-            }
-
-            return 1;
-        }
-
-        if(i->second != status)
-        {
-            i->second = status;
-
-            if(self->autosend_)
-            {
-                self->send_statusbuffer_values();
-            }
-        }
+        self->set_status_raw(musical, coordinate, 0);
 
         return 1;
     }
 
-    static int get_status__(void *self_, void *musical_, void *row_, void *col_)
+    static int set_status__(void *self_, void *musical_, void *coordinate_, void *status_)
     {
         impl_t *self = (impl_t *)self_;
         bool musical = *(bool *)musical_;
-        int row = *(int *)row_;
-        int col = *(int *)col_;
+        piw::coordinate_t coordinate = *(piw::coordinate_t *)coordinate_;
+        unsigned char status = *(unsigned char *)status_;
 
-        pic::lckmap_t<statusdata_t,unsigned char>::nbtype::iterator i;
+        self->set_status_raw(musical, coordinate, status);
 
-        i = self->statusbuffer_.find(statusdata_t(musical,row,col));
+        return 1;
+    }
+
+    void set_status_raw(bool musical, const piw::coordinate_t &coordinate, unsigned char status)
+    {
+        piw::statusdata_t statusdata = piw::statusdata_t(musical,coordinate,status);
+
+        pic::lckset_t<piw::statusdata_t>::nbtype::iterator i;
+        i = statusbuffer_.find(statusdata);
+
+        bool changed = false;
+        if(i==statusbuffer_.end())
+        {
+            if(status)
+            {
+                statusbuffer_.insert(statusdata);
+                changed = true;
+            }
+        }
+        else if(i->status_ != status)
+        {
+            statusbuffer_.erase(i);
+            changed = true;
+            if(status)
+            {
+                statusbuffer_.insert(statusdata);
+            }
+        }
+
+        if(changed && autosend_)
+        {
+            send_statusbuffer_values();
+        }
+    }
+
+    static int get_status__(void *self_, void *musical_, void *coordinate_)
+    {
+        impl_t *self = (impl_t *)self_;
+        bool musical = *(bool *)musical_;
+        piw::coordinate_t coordinate = *(piw::coordinate_t *)coordinate_;
+
+        pic::lckset_t<piw::statusdata_t>::nbtype::iterator i;
+
+        i = self->statusbuffer_.find(piw::statusdata_t(musical,coordinate,0));
 
         if(i==self->statusbuffer_.end())
         {
             return 0;
         }
 
-        return i->second;
+        return i->status_;
     }
 
     static int set_blink_time__(void *self_, void *time_)
@@ -256,15 +191,6 @@ struct piw::statusbuffer_t::impl_t: piw::event_data_source_real_t, piw::thing_t,
         impl_t *self = (impl_t *)self_;
 
         self->blink_time_=unsigned(time*1000);
-        return 1;
-    }
-
-    static int set_blink_size__(void *self_, void *size_)
-    {
-        unsigned size = *(unsigned *)size_;
-        impl_t *self = (impl_t *)self_;
-
-        self->blink_size_=size;
         return 1;
     }
 
@@ -346,14 +272,19 @@ struct piw::statusbuffer_t::impl_t: piw::event_data_source_real_t, piw::thing_t,
         piw::tsd_fastcall(clear__,this,0);
     }
 
-    void set_status(bool musical, int row, int col, unsigned char status)
+    void clear_status(bool musical, piw::coordinate_t c)
     {
-        piw::tsd_fastcall5(set_status__,this,&musical,&row,&col,&status);
+        piw::tsd_fastcall3(clear_status__,this,&musical,&c);
     }
 
-    unsigned char get_status(bool musical, int row, int col)
+    void set_status(bool musical, piw::coordinate_t c, unsigned char status)
     {
-        return (unsigned char)piw::tsd_fastcall4(get_status__,this,&musical,&row,&col);
+        piw::tsd_fastcall4(set_status__,this,&musical,&c,&status);
+    }
+
+    unsigned char get_status(bool musical, piw::coordinate_t c)
+    {
+        return (unsigned char)piw::tsd_fastcall3(get_status__,this,&musical,&c);
     }
 
     void set_blink_time(float time)
@@ -361,9 +292,16 @@ struct piw::statusbuffer_t::impl_t: piw::event_data_source_real_t, piw::thing_t,
         piw::tsd_fastcall(set_blink_time__,this,&time);
     }
 
-    void set_blink_size(unsigned size)
+    void set_blink_geometry(const piw::data_t &geometry)
     {
-        piw::tsd_fastcall(set_blink_size__,this,&size);
+        if(geometry.is_tuple())
+        {
+            blink_geometry_.set_normal(geometry);
+        }
+        else
+        {
+            blink_geometry_.clear();
+        }
     }
 
     void enabler(const piw::data_nb_t &d)
@@ -383,7 +321,7 @@ struct piw::statusbuffer_t::impl_t: piw::event_data_source_real_t, piw::thing_t,
 
     void blinker(const piw::data_nb_t &d)
     {
-        if(d.is_null() || d.as_norm()==0 || blinking_)
+        if(d.is_null() || d.as_norm()<0.5 || blinking_)
         {
             return;
         }
@@ -417,8 +355,8 @@ struct piw::statusbuffer_t::impl_t: piw::event_data_source_real_t, piw::thing_t,
     unsigned channel_;
     unsigned size_;
     unsigned blink_time_;
-    unsigned blink_size_;
-    pic::lckmap_t<statusdata_t,unsigned char>::nbtype statusbuffer_;
+    piw::dataholder_nb_t blink_geometry_;
+    pic::lckset_t<piw::statusdata_t>::nbtype statusbuffer_;
     bool autosend_;
 };
 
@@ -433,6 +371,10 @@ piw::change_nb_t piw::statusbuffer_t::blinker()
 }
 
 piw::statusbuffer_t::statusbuffer_t(const piw::change_nb_t &s, unsigned ch, const cookie_t &c): root_(new impl_t(s,ch,c))
+{
+}
+
+piw::statusbuffer_t::statusbuffer_t(const cookie_t &c): root_(new impl_t(piw::change_nb_t(), 0, c))
 {
 }
 
@@ -461,14 +403,19 @@ void piw::statusbuffer_t::clear()
     root_->clear();
 }
 
-void piw::statusbuffer_t::set_status(bool musical, int row, int col, unsigned char status)
+void piw::statusbuffer_t::clear_status(bool musical, const coordinate_t &c)
 {
-    root_->set_status(musical,row,col,status);
+    root_->clear_status(musical,c);
 }
 
-unsigned char piw::statusbuffer_t::get_status(bool musical, int row, int col)
+void piw::statusbuffer_t::set_status(bool musical, const coordinate_t &c, unsigned char status)
 {
-    return root_->get_status(musical,row,col);
+    root_->set_status(musical,c,status);
+}
+
+unsigned char piw::statusbuffer_t::get_status(bool musical, const coordinate_t &c)
+{
+    return root_->get_status(musical,c);
 }
 
 void piw::statusbuffer_t::set_blink_time(float time)
@@ -476,9 +423,28 @@ void piw::statusbuffer_t::set_blink_time(float time)
     root_->set_blink_time(time);
 }
 
-void piw::statusbuffer_t::set_blink_size(unsigned size)
+void piw::statusbuffer_t::set_blink_geometry(const piw::data_t &geometry)
 {
-    root_->set_blink_size(size);
+    root_->set_blink_geometry(geometry);
+}
+
+piw::data_nb_t piw::statusbuffer_t::make_statusbuffer(const statusset_t &status)
+{
+    unsigned char *dp;
+    unsigned long long t = piw::tsd_time();
+    unsigned s = status.size()*6;
+
+    piw::data_nb_t result = makeblob_nb(t,s,&dp);
+
+    pic::lckset_t<piw::statusdata_t>::nbtype::const_iterator i;
+
+    for(i=status.begin(); i!=status.end(); i++)
+    {
+        i->to_bytes(dp);
+        dp+=6;
+    }
+
+    return result;
 }
 
 int piw::statusbuffer_t::gc_traverse(void *v, void *a) const

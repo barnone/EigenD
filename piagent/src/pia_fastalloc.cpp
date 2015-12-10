@@ -34,7 +34,6 @@
 #define PIA_ALLOC_LIMIT (15*4)
 #define PTRADD(p,o) (((unsigned char *)(p))+(o))
 #define WATERMARK 2
-#define SLB_WATERMARK 10
 #define ALIGN(size, boundary) (((size) + ((boundary) - 1)) & ~((boundary) - 1))
 
 /*
@@ -58,22 +57,20 @@
 
 namespace
 {
-    struct slbheader_t
-    {
-        slbheader_t *next;
-        pic_atomic_t refc;
-    };
-
-    typedef slbheader_t * volatile vslbhdr_t;
-
     struct blkheader_t
     {
         blkheader_t *next;
-        pic_atomic_t refc;
         pic_atomic_t freelist;
     };
 
     typedef blkheader_t * volatile vblkhdr_t;
+
+    struct allocmutex_t: pic::mutex_t
+    {
+        allocmutex_t(): pic::mutex_t(false,true)
+        {
+        };
+    };
 };
 
 struct pia::fastalloc_t::nbimpl_t: pic::thread_t
@@ -84,38 +81,38 @@ struct pia::fastalloc_t::nbimpl_t: pic::thread_t
     volatile bool stop_;
     pic_atomic_t free_[4];
     pic::xgate_t gate_;
-    pic_atomic_t waste_;
-    pic_atomic_t slbfree_;
-    vslbhdr_t slbhead_;
+    pic_atomic_t total_;
+    allocmutex_t mutex_[PIA_ALLOC_LIMIT];
 
-    void add_waste(unsigned waste)
+    void add_total(unsigned total)
     {
         for(;;)
         {
-            pic_atomic_t ow = waste_;
-            pic_atomic_t nw = ow+waste;
+            pic_atomic_t ow = total_;
+            pic_atomic_t nw = ow+total;
 
-            if(pic_atomiccas(&waste_,ow,nw))
+            if(pic_atomiccas(&total_,ow,nw))
             {
                 break;
             }
         }
     }
 
-    void del_waste(unsigned waste)
+    void del_total(unsigned total)
     {
         for(;;)
         {
-            pic_atomic_t ow = waste_;
+            pic_atomic_t ow = total_;
 
-            if(waste>ow)
+            if(total>ow)
             {
+                printf("allocator inconsistency\n");
                 abort();
             }
 
-            pic_atomic_t nw = ow-waste;
+            pic_atomic_t nw = ow-total;
 
-            if(pic_atomiccas(&waste_,ow,nw))
+            if(pic_atomiccas(&total_,ow,nw))
             {
                 break;
             }
@@ -127,7 +124,7 @@ struct pia::fastalloc_t::nbimpl_t: pic::thread_t
 #ifdef DEBUG_DATA_ATOMICITY
         std::cout << "Started fast allocation thread with ID " << pic_current_threadid() << std::endl;
 #endif
- 
+
         while(!stop_)
         {
             for(unsigned i=0;i<4;i++)
@@ -147,30 +144,18 @@ struct pia::fastalloc_t::nbimpl_t: pic::thread_t
                 }
             }
 
-            {
-                pic_atomic_t free = slbfree_;
-
-                if(pic_atomiccas(&slbfree_,free,free))
-                {
-                    while(free < SLB_WATERMARK)
-                    {
-                        //printf("allocating block for queue %u\n",sizes_[PIA_ALLOC_LIMIT-4+i]);
-                        slb_release(newslb());
-                        free++;
-                    }
-                }
-            }
-
             gate_.pass_and_shut_timed(5000000);
+            //printf("Allocator: total allocated = %u\n",total_);
         }
     }
 
-	virtual ~nbimpl_t()
-	{
+    virtual ~nbimpl_t()
+    {
         stop_=true;
         gate_.open();
         wait();
-	}
+        printf("Destroying Allocator, Total allocated = %u\n",total_);
+    }
 
     void incref()
     {
@@ -186,37 +171,8 @@ struct pia::fastalloc_t::nbimpl_t: pic::thread_t
         }
     }
 
-    void slb_release(slbheader_t *blk)
-    {
-        if(pic_atomicdec(&blk->refc)>0)
-        {
-            return;
-        }
-
-        while(1)
-        {
-            slbheader_t *head = slbhead_;
-            blk->next = head;
-            if(pic_atomicptrcas((void *)&(slbhead_), head, blk))
-            {
-                pic_atomicinc(&slbfree_);
-                return;
-            }
-        }
-    }
-
-    void slb_reserve(slbheader_t *blk)
-    {
-        pic_atomicinc(&blk->refc);
-    }
-
     void release(blkheader_t *blk)
     {
-        if(pic_atomicdec(&blk->refc)>0)
-        {
-            return;
-        }
-
         unsigned fl = blk->freelist;
 
         if(fl == PIA_ALLOC_LIMIT)
@@ -224,89 +180,45 @@ struct pia::fastalloc_t::nbimpl_t: pic::thread_t
             return;
         }
 
-        if(!pic_atomiccas(&(blk->freelist),fl,PIA_ALLOC_LIMIT))
+        allocmutex_t::guard_t g(mutex_[fl]);
+
+        blkheader_t *head = queue_[fl];
+        blk->next = head;
+        queue_[fl] = blk;
+        del_total(sizes_[fl]);
+
+        if(fl+4>=PIA_ALLOC_LIMIT)
         {
-            return;
+            pic_atomicinc(&free_[fl+4-PIA_ALLOC_LIMIT]);
         }
 
-        while(1)
-        {
-            blkheader_t *head = queue_[fl];
-            blk->next = head;
-            if(pic_atomicptrcas((void *)&(queue_[fl]), head, blk))
-            {
-                if(fl+4>=PIA_ALLOC_LIMIT)
-                {
-                    pic_atomicinc(&free_[fl+4-PIA_ALLOC_LIMIT]);
-                }
-
-                return;
-            }
-        }
-    }
-
-    void reserve(blkheader_t *blk)
-    {
-        pic_atomicinc(&blk->refc);
-    }
-
-    slbheader_t *slb_alloc()
-    {
-        while(1)
-        {
-            slbheader_t *head = slbhead_;
-
-            if(!head)
-            {
-                return newslb();
-            }
-
-            slb_reserve(head);
-
-            if(pic_atomicptrcas((void *)&(slbhead_), head, head->next))
-            {
-                pic_atomicdec(&slbfree_);
-                gate_.open();
-                return head;
-            }
-
-            slb_release(head);
-        }
     }
 
     blkheader_t *alloc(unsigned fl)
     {
-        while(1)
+        allocmutex_t::guard_t g(mutex_[fl]);
+        blkheader_t *head = queue_[fl];
+
+        if(!head)
         {
-            blkheader_t *head = queue_[fl];
-
-            if(!head)
-            {
-                return 0;
-            }
-
-            reserve(head);
-
-            if(pic_atomicptrcas((void *)&(queue_[fl]), head, head->next))
-            {
-                PIC_ASSERT(pic_atomiccas(&(head->freelist),PIA_ALLOC_LIMIT,fl));
-
-                if(fl+4>=PIA_ALLOC_LIMIT)
-                {
-                    pic_atomicdec(&free_[fl+4-PIA_ALLOC_LIMIT]);
-                    gate_.open();
-                }
-
-                return head;
-            }
-
-            release(head);
+            return 0;
         }
+
+        queue_[fl] = queue_[fl]->next;
+
+        if(fl+4>=PIA_ALLOC_LIMIT)
+        {
+            pic_atomicdec(&free_[fl+4-PIA_ALLOC_LIMIT]);
+            gate_.open();
+        }
+
+        add_total(sizes_[fl]);
+        return head;
     }
 
-	blkheader_t *get0(unsigned i)
-	{
-		blkheader_t *blk;
+    blkheader_t *get0(unsigned i)
+    {
+        blkheader_t *blk;
 
         if((blk=alloc(i))!=0)
         {
@@ -319,79 +231,41 @@ struct pia::fastalloc_t::nbimpl_t: pic::thread_t
             return blk;
         }
 
-		blk=get0(i+4);
+        blk=get0(i+4);
         blkheader_t *blk2 = (blkheader_t *)PTRADD(blk,sizes_[i]);
-
-        blk2->refc=1;
         blk2->freelist=i;
         blk->freelist=i;
 
         release(blk2);
         return blk;
-	}
+    }
 
-    void *allocator_smalloc()
+    void *allocator_malloc(size_t size)
     {
-        slbheader_t *ptr;
-        ptr = slb_alloc();
+        int i;
+        blkheader_t *ptr;
 
-        if(!ptr)
+        for(i=0;i<PIA_ALLOC_LIMIT;i++)
         {
-            return 0;
-        }
-
-        incref();
-        return (void *)(ptr+1);
-    }
-
-    static void allocator_sfree(void *mem, void *da)
-    {
-		slbheader_t *ptr = ((slbheader_t *)mem)-1;
-        nbimpl_t *a = (nbimpl_t *)da;
-		a->slb_release(ptr);
-        a->decref();
-    }
-
-	void *allocator_malloc(size_t size)
-	{
-		int i;
-		blkheader_t *ptr;
-
-		for(i=0;i<PIA_ALLOC_LIMIT;i++)
-		{
-			if(size+sizeof(blkheader_t) <= sizes_[i])
-			{
-				ptr = get0(i);
+            if(size+sizeof(blkheader_t) <= sizes_[i])
+            {
+                ptr = get0(i);
                 incref();
                 return (void *)(ptr+1);
-			}
-		}
-
-        PIC_THROW("size too large for allocation");
-		return NULL;
-	}
-
-	static void allocator_free(void *mem, void *da)
-	{
-		blkheader_t *ptr = ((blkheader_t *)mem)-1;
-        nbimpl_t *a = (nbimpl_t *)da;
-		a->release(ptr);
-        a->decref();
-	}
-
-    slbheader_t *newslb()
-    {
-        slbheader_t *p;
-        unsigned s = PIC_ALLOC_SLABSIZE+sizeof(slbheader_t);
-
-        if(!(p = (slbheader_t *)pic_thread_lck_malloc(s)))
-        {
-            abort();
+            }
         }
 
-        memset(p,0xaa,s);
-        p->refc=1;
-        return p;
+        PIC_THROW("size too large for allocation");
+        return NULL;
+    }
+
+    static void allocator_free(void *mem, void *da)
+    {
+        if(NULL == mem) return;
+        blkheader_t *ptr = ((blkheader_t *)mem)-1;
+        nbimpl_t *a = (nbimpl_t *)da;
+        a->release(ptr);
+        a->decref();
     }
 
     blkheader_t *newblock(unsigned fl)
@@ -401,36 +275,37 @@ struct pia::fastalloc_t::nbimpl_t: pic::thread_t
 
         if(!(p = (blkheader_t *)pic_thread_lck_malloc(s)))
         {
+            printf("out of memory\n");
             abort();
         }
 
         memset(p,0xaa,s);
-        p->refc=1;
         p->freelist=fl;
+        add_total(sizes_[fl]);
 
         return p;
     }
 
-	nbimpl_t(): count_(1), stop_(false), waste_(0), slbfree_(0), slbhead_(0)
-	{
-		unsigned i,j;
+    nbimpl_t(): count_(1), stop_(false), total_(0)
+    {
+        unsigned i,j;
 
-		for(i=0;i<4;i++)
+        for(i=0;i<4;i++)
         {
-			queue_[i]=0;
+            queue_[i]=0;
 #ifdef ALIGN_16
-			sizes_[i]=64+16*i; 
+            sizes_[i]=64+16*i; 
 #else
             sizes_[i]=32+8*i;
 #endif
             free_[i]=0;
         }
 
-		for(i=4;i<PIA_ALLOC_LIMIT;i++)
-		{
-			queue_[i]=0;
-			sizes_[i]=sizes_[i-4]*2;
-		}
+        for(i=4;i<PIA_ALLOC_LIMIT;i++)
+        {
+            queue_[i]=0;
+            sizes_[i]=sizes_[i-4]*2;
+        }
 
         for(j=0;j<4;j++)
         {
@@ -440,24 +315,19 @@ struct pia::fastalloc_t::nbimpl_t: pic::thread_t
             }
         }
 
-        for(i=0;i<SLB_WATERMARK;i++)
-        {
-            slb_release(newslb());
-        }
-
         run();
-	}
+    }
 
 };
 
 pia::fastalloc_t::fastalloc_t()
 {
-	nbimpl_ = new nbimpl_t;
+    nbimpl_ = new nbimpl_t;
 }
 
 pia::fastalloc_t::~fastalloc_t()
 {
-	nbimpl_->decref();
+    nbimpl_->decref();
 }
 
 static void demallocator(void *ptr, void *)
@@ -467,15 +337,6 @@ static void demallocator(void *ptr, void *)
 
 void *pia::fastalloc_t::allocator_xmalloc(unsigned nb,size_t size, deallocator_t *d, void **da)
 {
-    if(nb==PIC_ALLOC_SLB)
-    {
-        PIC_ASSERT(size<=PIC_ALLOC_SLABSIZE);
-        *d = nbimpl_t::allocator_sfree;
-        *da = nbimpl_;
-        void *ptr = nbimpl_->allocator_smalloc();
-        return ptr;
-    }
-
     if(nb==PIC_ALLOC_NORMAL)
     {
         *d = demallocator;
@@ -484,12 +345,11 @@ void *pia::fastalloc_t::allocator_xmalloc(unsigned nb,size_t size, deallocator_t
         return ptr;
     }
 
-
     *d = nbimpl_t::allocator_free;
     *da = nbimpl_;
 
     void *ptr = nbimpl_->allocator_malloc(size);
-	return ptr;
+    return ptr;
 }
 
 pia::mallocator_t::mallocator_t()
@@ -502,25 +362,6 @@ pia::mallocator_t::~mallocator_t()
 
 void *pia::mallocator_t::allocator_xmalloc(unsigned nb,size_t size, deallocator_t *d, void **da)
 {
-    //std::cout << ">>>>>> malloc " << size << std::endl;
-    
-    //if(size==32888)
-    //if(size==49112)
-    //if(size==52660)
-    /*
-    if(size==1024)
-    {
-        void* callstack[128];
-        int i, frames = backtrace(callstack, 128);
-        char** strs = backtrace_symbols(callstack, frames);
-        for (i = 0; i < frames; ++i) {
-            std::cout << strs[i] << size << std::endl;
-        }
-        free(strs);
-        //abort();
-    }
-    */
-    
     *d = demallocator;
     void *ptr = malloc(size);
     PIC_ASSERT(ptr);

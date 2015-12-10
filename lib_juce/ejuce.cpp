@@ -25,6 +25,7 @@ struct ejuce::Application::impl_t: public juce::MessageListener, virtual public 
 {
     impl_t(Application *app,const pic::f_string_t &,bool ck,bool rt);
     ~impl_t();
+    void cleanup();
     void handleMessage(const juce::Message &message);
     void handleGone();
     void handleService();
@@ -37,7 +38,7 @@ struct ejuce::Application::impl_t: public juce::MessageListener, virtual public 
 
 void ejuce::Application::impl_t::handleGone()
 {
-    application_->handleGone();
+    if(application_) application_->handleGone();
 }
 
 void ejuce::Application::impl_t::handleService()
@@ -47,12 +48,12 @@ void ejuce::Application::impl_t::handleService()
 
 void ejuce::Application::impl_t::handleMessage(const juce::Message &message)
 {
-    scaffold_->process_ctx();
+    if(scaffold_) scaffold_->process_ctx();
 }
 
 void ejuce::Application::impl_t::handleWinch(const std::string &message)
 {
-    application_->handleWinch(message);
+    if(application_) application_->handleWinch(message);
 }
 
 ejuce::Application::impl_t::impl_t(Application *app,const pic::f_string_t &l,bool ck,bool rt): application_(app)
@@ -63,7 +64,14 @@ ejuce::Application::impl_t::impl_t(Application *app,const pic::f_string_t &l,boo
 
 ejuce::Application::impl_t::~impl_t()
 {
+    application_ = 0;
+    scaffold_ = 0;
     tracked_invalidate();
+}
+
+void ejuce::Application::impl_t::cleanup()
+{
+    if(scaffold_) scaffold_->shutdown();
 }
 
 ejuce::Application::Application(): messages_(0)
@@ -76,18 +84,40 @@ ejuce::Application::~Application()
 
 pia::scaffold_gui_t *ejuce::Application::scaffold()
 {
+    if(!messages_)
+    {
+        return 0;
+    }
     return messages_->scaffold_;
 }
 
 void ejuce::Application::initialise (const juce::String& commandLine,const pic::f_string_t &l,bool ck,bool rt)
 {
     messages_ = new impl_t(this,l,ck,rt);
+
+    // putting this here ensures that removed or added MIDI devices
+    // are being detected by CoreMIDI on MacOSX
+    juce::MidiInput::getDevices();
+    juce::MidiOutput::getDevices();
 }
 
 void ejuce::Application::shutdown()
 {
     if(messages_)
-        delete messages_;
+    {
+        impl_t *m = messages_;
+        messages_ = 0;
+        delete m;
+    }
+}
+
+void ejuce::Application::cleanup()
+{
+    if(!messages_)
+    {
+        return;
+    }
+    messages_->cleanup();
 }
 
 void ejuce::Application::handleGone()
@@ -97,3 +127,44 @@ void ejuce::Application::handleGone()
 void ejuce::Application::handleWinch(const std::string &message)
 {
 }
+
+juce::File ejuce::pathToFile(const std::string &path)
+{
+    return pathToFile(path.c_str());
+}
+
+juce::File ejuce::pathToFile(const char* path)
+{
+#ifndef PI_WINDOWS
+    return juce::File(path);
+#else
+    int wchars_num = MultiByteToWideChar(CP_UTF8,0,path,-1,NULL,0);
+    wchar_t* wstr = new wchar_t[wchars_num];
+    MultiByteToWideChar(CP_UTF8,0,path,-1,wstr,wchars_num);
+    juce::File result = juce::File(wstr);
+    delete[] wstr;
+    return result;
+#endif
+}
+
+juce::URL ejuce::pathToURL(const std::string &path)
+{
+    return pathToURL(path.c_str());
+}
+
+juce::URL ejuce::pathToURL(const char* path)
+{
+    std::string protocol_path("file://");
+    protocol_path = protocol_path + path;
+#ifndef PI_WINDOWS
+    return juce::URL(protocol_path.c_str());
+#else
+    int wchars_num = MultiByteToWideChar(CP_UTF8,0,protocol_path.c_str(),-1,NULL,0);
+    wchar_t* wstr = new wchar_t[wchars_num];
+    MultiByteToWideChar(CP_UTF8,0,protocol_path.c_str(),-1,wstr,wchars_num);
+    juce::URL result = juce::URL(wstr);
+    delete[] wstr;
+    return result;
+#endif
+}
+

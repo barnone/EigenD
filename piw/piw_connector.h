@@ -28,10 +28,33 @@ namespace piw
 {
     class backend_t;
 
+    class PIW_DECLSPEC_CLASS backend_delegate_t: public virtual pic::tracked_t
+    {
+        public:
+            backend_delegate_t(bool clocked);
+            virtual ~backend_delegate_t();
+            virtual backend_t *create_controller_backend() = 0;
+            virtual backend_t *create_data_backend() = 0;
+            backend_t *get_controller_backend();
+            backend_t *get_data_backend();
+            void set_clock_source(piw::client_t *);
+            void set_clocked(bool clocked);
+            void set_latency(unsigned latency);
+            void clear();
+            bool isclocked() { return clocked_; }
+
+        private:
+            pic::weak_t<backend_t> ctl_backend_;
+            pic::weak_t<backend_t> data_backend_;
+            pic::weak_t<piw::client_t> clock_source_;
+            bool clocked_;
+            unsigned latency_;
+    };
+
     class PIW_DECLSPEC_CLASS connector_t: public client_t
     {
         public:
-            connector_t(bool ctl, backend_t *dbackend,backend_t *cbackend, const d2d_nb_t &filter,bool iso);
+            connector_t(bool ctl, backend_delegate_t *backend, const d2d_nb_t &filter, bool iso);
             virtual ~connector_t();
 
             int gc_traverse(void *, void *) const;
@@ -52,24 +75,23 @@ namespace piw
     class PIW_DECLSPEC_CLASS backend_t: virtual public pic::tracked_t
     {
         public:
-            backend_t(correlator_t *correlator, unsigned id, unsigned signal, int pri, unsigned type, bool clock);
+            backend_t(correlator_t *correlator, unsigned id, unsigned signal, int pri, unsigned type);
 
             virtual converter_ref_t create_converter(bool iso) = 0;
             virtual ~backend_t();
-            void set_clocked(bool c);
             void set_latency(unsigned l);
             void remove_latency();
+            void set_clock_source(piw::client_t *);
 
         private:
             friend class piw::connector_t::impl_t;
 
         private:
-            correlator_t *correlator_;
+            pic::weak_t<correlator_t> correlator_;
             unsigned iid_;
             unsigned signal_;
             int pri_;
             unsigned type_;
-            bool clock_;
     };
 
 }

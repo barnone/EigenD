@@ -32,9 +32,15 @@ import glob
 import sys
 import piw
 import picross
-import convolver_native
+import math
 from pi import  action,agent,atom,bundles,domain,files,paths,policy,resource,riff,upgrade,utils,node,logic,index,guid,rpc,async,state,container
-from plg_convolver import convolver_version as version
+from pi.logic.shortcuts import T
+from . import convolver_version as version, convolver_native
+
+def volume_function(db):
+    if db==-24: return 0.0
+    sc = pow(10.0,db/20.0)
+    return sc
 
 # ------------------------------------------------------------------------------------------------------------------
 # WavSample class: reads a wav (riff) file (for impulse response)
@@ -52,7 +58,7 @@ class WavSample:
 wav_reader = riff.Root('WAVE', riff.List(**{ 'fmt ': riff.Struct('<hHLLHH'), 'data': WavSample() }))
 
 def fgetsamples(filename):
-    f = open(filename,'rb',0)
+    f = resource.file_open(filename,'rb',0)
     r = wav_reader.read(f)
     chans = r['fmt '][1]
     rate = r['fmt '][2]
@@ -71,8 +77,8 @@ def rgetsamples(res):
 
 def wav_resource(name):
     # this is the impulse response directory
-    uf = resource.user_resource_file('ImpulseResponse',name,version='')
-    if os.path.isfile(uf):
+    uf = resource.user_resource_file(resource.impulseresponse_dir,name,version='')
+    if resource.os_path_isfile(uf):
         return fgetsamples(uf)
     return rgetsamples('plg_convolver/%s'%name)
 
@@ -170,7 +176,7 @@ class ImpulseBrowser(atom.Atom):
        
     # scan1: scan release and user directories for wav files
     def __scan1(self,pat,f=lambda x:x):
-        g = lambda path: glob.glob(os.path.join(path,pat))
+        g = lambda path: resource.glob_glob(os.path.join(path,pat))
         paths = g(self.reldir) + g(self.userdir)
         b = lambda path: os.path.splitext(os.path.basename(path))[0]
         # return filenames without extensions, 
@@ -187,7 +193,7 @@ class ImpulseBrowser(atom.Atom):
         self.__files = self.__f2p.keys()
         # read .name files whose filenames are belcanto names (phrases) and contents are the 
         # impulse cookies that the belcanto maps to
-        names,cookies = self.__scan1('*.name', lambda p: open(p).read().strip())
+        names,cookies = self.__scan1('*.name', lambda p: resource.file_open(p).read().strip())
         # remove name from filenames
         names = [name.replace('_',' ') for name in names]
         self.__n2c = dict(zip(names,cookies))
@@ -259,7 +265,9 @@ class Agent(agent.Agent):
         self.domain = piw.clockdomain_ctl()
 
         # verb container, used by all taps
-        agent.Agent.__init__(self,signature=version,names='convolver',container=3, ordinal=ordinal)
+        agent.Agent.__init__(self,signature=version,names='convolver',container=3,ordinal=ordinal)
+
+        self.vol = piw.make_f2f_table(-24,24,1000,picross.make_f2f_functor(volume_function))
 
         # outputs 
         self[1]=bundles.Output(1,True,names="left audio output")
@@ -267,10 +275,10 @@ class Agent(agent.Agent):
         self.output = bundles.Splitter(self.domain, self[1], self[2])
 
         # the convolver class
-        self.convolver = convolver_native.convolver(self.output.cookie(),self.domain)
+        self.convolver = convolver_native.convolver(self.vol,self.output.cookie(),self.domain)
 
         # input has the correlator and a bundle style output
-        self.input = bundles.ScalarInput(self.convolver.cookie(), self.domain, signals=(1,2,3))
+        self.input = bundles.ScalarInput(self.convolver.cookie(), self.domain, signals=(1,2,3,4))
 
         # self[3] = verb container
 
@@ -282,13 +290,14 @@ class Agent(agent.Agent):
         self[6]=atom.Atom(domain=domain.BoundedFloat(-1,1), names="right audio input", policy=self.input.nodefault_policy(2,True))
 
         # wet/dry mix
-        self[7]=atom.Atom(domain=domain.BoundedFloat(0,1), init=0.5, names="mix", protocols='input', policy=self.input.merge_policy(3,False))
+        self[7]=atom.Atom(domain=domain.BoundedFloat(-24,24,hints=(T('stageinc',0.1),T('inc',0.1),T('biginc',1),T('control','updown'))), init=0, names="dry gain", protocols='input', policy=self.input.merge_policy(3,False))
+        self[11]=atom.Atom(domain=domain.BoundedFloat(-24,24,hints=(T('stageinc',0.1),T('inc',0.1),T('biginc',1),T('control','updown'))), init=0, names="wet gain", protocols='input', policy=self.input.merge_policy(4,False))
         # effect enable
         self[8]=atom.Atom(domain=domain.Bool(), init=True, names="enable", protocols='input', policy=atom.default_policy(self.__set_enable))
         # mono processing mode
         self[9]=atom.Atom(domain=domain.Bool(), init=False, names="mono", policy=atom.default_policy(self.__set_mono_processing))
         # enable time, time to fade in and out when enabling in ms
-        self[10] = atom.Atom(names='enable time input', domain=domain.BoundedFloat(0,100000), init=100, policy=atom.default_policy(self.__set_enable_time))
+        self[10]=atom.Atom(names='enable time input', domain=domain.BoundedFloat(0,100000,hints=(T('stageinc',1),T('inc',1),T('biginc',10),T('control','updown'))), init=100, policy=atom.default_policy(self.__set_enable_time))
 
         self.__set_enable(self[8].get_value())
         self.__set_mono_processing(self[9].get_value())
@@ -332,7 +341,19 @@ class Agent(agent.Agent):
         self.convolver.set_enable_time(t)
         return True
 
-agent.main(Agent)
+class Upgrader(upgrade.Upgrader):
+    def upgrade_1_0_0_to_1_0_1(self,tools,address):
+        print 'upgrading convolver',address
+        root = tools.get_root(address)
+        dry_vol = root.get_node(7,254).get_data().as_float()
+        wet_vol = 1-dry_vol
+        dry_db = 20*math.log10(dry_vol)
+        wet_db = 20*math.log10(wet_vol)+24 # we're now automatically reducing by 24 db in the impulse importer
+        print 'dry vol',dry_vol,'dry db',dry_db,'wet vol',wet_vol,'wet db',wet_db
+        root.get_node(7,254).set_data(piw.makefloat_bounded(24,-24,0,dry_db,0))
+        root.ensure_node(11,254).set_data(piw.makefloat_bounded(24,-24,0,wet_db,0))
+
+agent.main(Agent,Upgrader)
 
 # ------------------------------------------------------------------------------------------------------------------
 

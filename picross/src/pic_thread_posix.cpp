@@ -48,12 +48,16 @@
 #include <sys/types.h>
 #include <sys/mman.h>
 
-void pic_thread_yield()
+void pic_thread_yield(void)
 {
     sched_yield();
 }
 
-void pic_set_fpu()
+void pic_init_dll_path(void)
+{
+}
+
+void pic_set_fpu(void)
 {
 }
 
@@ -61,7 +65,7 @@ void pic_set_foreground(bool rt)
 {
 }
 
-pic_threadid_t pic_current_threadid()
+pic_threadid_t pic_current_threadid(void)
 {
     return pthread_self();
 }
@@ -71,7 +75,7 @@ bool pic_threadid_equal(pic_threadid_t a, pic_threadid_t b)
     return pthread_equal(a, b);
 }
 
-static int __realtime(unsigned pri)
+static int __realtime(int pri)
 {
     struct sched_param sp;
 
@@ -109,7 +113,11 @@ static int __realtime(unsigned pri)
 #include <mach/thread_act.h>
 #include <CoreAudio/HostTime.h>
 
-static void __realtime(pthread_t thread, unsigned pri)
+void pic_init_dll_path(void)
+{
+}
+
+static void __realtime(pthread_t thread, int pri)
 {
     kern_return_t err;
 
@@ -347,7 +355,7 @@ void pic_set_core_unlimited()
 
 pic::tsd_t pic::thread_t::genctx__;
 
-pic::mutex_t::mutex_t(bool recursive)
+pic::mutex_t::mutex_t(bool recursive, bool inheritance)
 {
     pthread_mutexattr_t a;
     pthread_mutexattr_init(&a);
@@ -360,6 +368,15 @@ pic::mutex_t::mutex_t(bool recursive)
     {
         pthread_mutexattr_settype(&a,PTHREAD_MUTEX_ERRORCHECK_NP);
     }
+
+    if(inheritance)
+    {
+        pthread_mutexattr_setprotocol(&a,PTHREAD_PRIO_INHERIT_NP);
+    }
+    else
+    {
+        pthread_mutexattr_setprotocol(&a,PTHREAD_PRIO_NONE_NP);
+    }
 #endif
 
 #ifdef PI_MACOSX
@@ -370,6 +387,15 @@ pic::mutex_t::mutex_t(bool recursive)
     else
     {
         pthread_mutexattr_settype(&a,PTHREAD_MUTEX_ERRORCHECK);
+    }
+
+    if(inheritance)
+    {
+        pthread_mutexattr_setprotocol(&a,PTHREAD_PRIO_INHERIT);
+    }
+    else
+    {
+        pthread_mutexattr_setprotocol(&a,PTHREAD_PRIO_NONE);
     }
 #endif
 
@@ -387,7 +413,7 @@ void pic::mutex_t::lock() { PIC_ASSERT(pthread_mutex_lock(&data_)==0); }
 void pic::mutex_t::unlock() { PIC_ASSERT(pthread_mutex_unlock(&data_)==0); }
 bool pic::mutex_t::trylock() { return (pthread_mutex_trylock(&data_)==0); }
 
-pic::thread_t::thread_t(unsigned realtime)
+pic::thread_t::thread_t(int realtime)
 {
     realtime_=realtime;
     run_gate_.open();

@@ -18,9 +18,8 @@
 # along with EigenD.  If not, see <http://www.gnu.org/licenses/>.
 #
 
-from pi import resource,utils
+from pi import resource,utils,version
 from xml.etree import cElementTree
-from plg_language import interpreter_version as version
 import picross
 import os
 import urllib
@@ -100,14 +99,14 @@ class HelpManager:
     def update(self):
 
         try:
-            doc_file = resource.user_resource_file('Help','documentation.xml')
+            doc_file = resource.user_resource_file(resource.help_dir,'documentation.xml')
             ((major,minor,build),tag) = resource.split_version(version.version)
             doc_url = "%s/%d.%d" % (doc_base,major,minor)
             print 'loading documentation from',doc_url
             doc_conn = urllib.urlopen(doc_url)
             doc_text = doc_conn.read()
             doc_conn.close()
-            doc_out = open(doc_file,'w')
+            doc_out = resource.file_open(doc_file,'w')
             doc_out.write(doc_text)
             doc_out.close()
             print 'loaded documentation'
@@ -122,8 +121,8 @@ class HelpManager:
         self.__agents = {}
         self.__cache = {}
 
-        user_doc = resource.find_resource('Help','documentation.xml')
-        release_doc = resource.find_release_resource('Help','documentation.xml')
+        user_doc = resource.find_resource(resource.help_dir,'documentation.xml')
+        release_doc = resource.find_release_resource(resource.help_dir,'documentation.xml')
 
         try:
             self.load_file(user_doc)
@@ -136,7 +135,7 @@ class HelpManager:
 
     def load_file(self,path):
         print 'loading',path
-        node = cElementTree.parse(path)
+        node = cElementTree.parse(resource.WC(path))
 
         assert node.getroot().tag == 'documentation'
 

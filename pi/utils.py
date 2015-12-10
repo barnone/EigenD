@@ -191,18 +191,6 @@ def slowchange(c):
 def fastchange(c):
     return piw.fastchange(changify_nb(c))
 
-def gather(dir, f):
-    """
-    Return list of filenames under dir for which the predicate
-    callable f(filename) evaluates to true.
-    """
-    ret = []
-    walkfunc = lambda arg, dir, names: [
-        arg.append(os.path.join(dir, name))
-        for name in names if f(os.path.join(dir, name))]
-    os.path.walk(dir, walkfunc, ret)
-    return ret
-
 def call_locked_callable(snapshot, callable, *args):
     """
     call a callable object in the context of a mainloop lock
@@ -263,3 +251,14 @@ def maketuple_floats(items,ts):
 
 def tuple_items(d):
     return [ (d.as_tuple_value(i)) for i in range(0,d.as_tuplelen()) ]
+
+def key_to_lists(d):
+    if not piw.is_key(d): return None
+
+    column = d.as_tuple_value(0).as_tuple_value(0).as_float()
+    row = d.as_tuple_value(0).as_tuple_value(1).as_float()
+    course = d.as_tuple_value(1).as_tuple_value(0).as_float()
+    key = d.as_tuple_value(1).as_tuple_value(1).as_float()
+    hardness = d.as_tuple_value(2).as_long()
+
+    return [[column,row],[course,key],hardness]

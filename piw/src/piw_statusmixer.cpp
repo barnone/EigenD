@@ -27,18 +27,6 @@
 
 namespace
 {
-    static inline int c2int(unsigned char *c)
-    {
-        unsigned long cx = (c[0]<<8) | (c[1]);
-
-        if(cx>0x7fff)
-        {
-            return ((long)cx)-0x10000;
-        }
-
-        return cx;
-    }
-
     struct receiver_t: piw::ufilterfunc_t, virtual pic::lckobject_t, pic::element_t<0>
     {
         receiver_t(piw::statusmixer_t::impl_t *root): root_(root), status_data_(), active_(false)
@@ -98,16 +86,14 @@ struct piw::statusmixer_t::impl_t: virtual pic::lckobject_t, piw::ufilterctl_t, 
             unsigned char* rs = ((unsigned char*)rd.as_blob());
             unsigned rl = rd.as_bloblen();
 
-            while(rl>=5)
+            while(rl>=6)
             {
-                int kr = c2int(&rs[0]);
-                int kc = c2int(&rs[2]);
-                bool kmus = rs[4]>>7;
-                unsigned kv = rs[4]&0x7f;
+                piw::statusdata_t status = piw::statusdata_t::from_bytes(rs);
 
+                unsigned char kv = status.status_;
                 if(kv!=BCTSTATUS_OFF)
                 {
-                    unsigned os = output_.get_status(kmus,kr,kc);
+                    unsigned os = output_.get_status(status.musical_,status.coordinate_);
 
                     if(os!=kv)
                     {
@@ -116,12 +102,12 @@ struct piw::statusmixer_t::impl_t: virtual pic::lckobject_t, piw::ufilterctl_t, 
                             kv = BCTSTATUS_MIXED;
                         }
 
-                        output_.set_status(kmus,kr,kc,kv);
+                        output_.set_status(status.musical_,status.coordinate_,kv);
                     }
                 }
 
-                rs+=5;
-                rl-=5;
+                rs+=6;
+                rl-=6;
             }
         }
         

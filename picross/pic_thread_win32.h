@@ -23,7 +23,6 @@
 #include <picross/pic_error.h>
 #include <picross/pic_atomic.h>
 #include <picross/pic_config.h>
-#include <picross/pic_mlock.h>
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -35,17 +34,18 @@
 
 typedef DWORD pic_threadid_t;
 
-PIC_DECLSPEC_FUNC(void) pic_set_fpu();
+PIC_DECLSPEC_FUNC(void) pic_set_fpu(void);
 PIC_DECLSPEC_FUNC(void) pic_set_foreground(bool rt);
 PIC_DECLSPEC_FUNC(void) pic_set_interrupt(void);
 PIC_DECLSPEC_FUNC(void) pic_mlock_code(void);
 PIC_DECLSPEC_FUNC(void) pic_set_core_unlimited();
+PIC_DECLSPEC_FUNC(void) pic_init_dll_path(void);
 
 PIC_DECLSPEC_FUNC(void) pic_thread_lck_free(void *ptr, unsigned size);
 PIC_DECLSPEC_FUNC(void) *pic_thread_lck_malloc(unsigned size);
-PIC_DECLSPEC_FUNC(void) pic_thread_yield();
+PIC_DECLSPEC_FUNC(void) pic_thread_yield(void);
 
-PIC_DECLSPEC_FUNC(pic_threadid_t) pic_current_threadid();
+PIC_DECLSPEC_FUNC(pic_threadid_t) pic_current_threadid(void);
 PIC_DECLSPEC_FUNC(bool) pic_threadid_equal(pic_threadid_t, pic_threadid_t);
 
 namespace pic
@@ -58,9 +58,9 @@ namespace pic
         public:
             semaphore_t();
             ~semaphore_t();
-            void up() PIC_FASTCODE;
-            bool untimeddown() PIC_FASTCODE;
-            bool timeddown(unsigned long long timeout) PIC_FASTCODE;
+            void up();
+            bool untimeddown();
+            bool timeddown(unsigned long long timeout);
         private:
             HANDLE sem_;
     };
@@ -85,11 +85,11 @@ namespace pic
             };
 
         public:
-            mutex_t(bool recursive=false);
+            mutex_t(bool recursive=false, bool inheritance=false);
             ~mutex_t();
-            void lock() PIC_FASTCODE;
-            void unlock() PIC_FASTCODE;
-            bool trylock() PIC_FASTCODE;
+            void lock();
+            void unlock();
+            bool trylock();
 
         private:
             CRITICAL_SECTION data_;
@@ -159,11 +159,11 @@ namespace pic
         public:
             gate_t();
             ~gate_t();
-            bool open() PIC_FASTCODE;
-            bool shut() PIC_FASTCODE;
-            void untimedpass() PIC_FASTCODE;
-            bool timedpass(unsigned long long timeout) PIC_FASTCODE;
-            bool isopen() PIC_FASTCODE;
+            bool open();
+            bool shut();
+            void untimedpass();
+            bool timedpass(unsigned long long timeout);
+            bool isopen();
         private:
             HANDLE event_;
             CRITICAL_SECTION lock_;
@@ -184,11 +184,11 @@ namespace pic
     class PIC_DECLSPEC_CLASS thread_t
     {
         public:
-            thread_t(unsigned priority=PIC_THREAD_PRIORITY_NORMAL);
+            thread_t(int priority=PIC_THREAD_PRIORITY_NORMAL);
             virtual ~thread_t();
             void run();
             void wait();
-            bool isrunning() PIC_FASTCODE;
+            bool isrunning();
 
             static tsd_t genctx__;
             inline static void *tsd_setcontext(void *ctx) { return genctx__.set(ctx); }
@@ -219,9 +219,9 @@ namespace pic
     {
         public:
             xgate_t();
-            void open() PIC_FASTCODE;
-            unsigned pass_and_shut_timed(unsigned long long t) PIC_FASTCODE;
-            unsigned pass_and_shut() PIC_FASTCODE;
+            void open();
+            unsigned pass_and_shut_timed(unsigned long long t);
+            unsigned pass_and_shut();
         private:
             pic_atomic_t flag_;
             pic::semaphore_t sem_;

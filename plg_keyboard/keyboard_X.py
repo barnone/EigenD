@@ -28,8 +28,7 @@ from lib_alpha2 import ezload
 
 from pi import atom, toggle, utils, bundles, domain, agent, paths, action, logic, policy, upgrade, resource, guid, audio, const, node
 from pi.logic.shortcuts import *
-from plg_keyboard import alpha_manager_version as version
-from plg_keyboard import test
+from . import alpha_manager_version as version, test, keyboard_native
 
 R = lambda a,b: range(a,b+1)
 
@@ -49,7 +48,7 @@ def pedal_file(id):
 
 class VirtualKey(atom.Atom):
     def __init__(self,keys):
-        atom.Atom.__init__(self,names='k',protocols='virtual')
+        atom.Atom.__init__(self,names='key',protocols='virtual')
         self.choices=[]
         self.kbd_keys = keys
 
@@ -73,14 +72,13 @@ class Keyboard(agent.Agent):
 
     def __init__(self,names,ordinal,dom,remove,keys):
         self.kbd_keys = keys
-        agent.Agent.__init__(self,names=names,ordinal=ordinal,signature=version,subsystem='kbd',volatile=True,container=102,protocols='browse is_subsys')
+        agent.Agent.__init__(self,names=names,ordinal=ordinal,signature=version,subsystem='kbd',volatile=True,container=102,protocols='oldbrowse is_subsys')
 
         self.remover=remove
 
         self.domain = piw.clockdomain_ctl()
         self.domain.set_source(piw.makestring('*',0))
 
-        self[1] = bundles.Output(1,False,names='activation output')
         self[2] = bundles.Output(2,False,names='pressure output')
         self[3] = bundles.Output(3,False,names='roll output')
         self[4] = bundles.Output(4,False,names='yaw output')
@@ -103,7 +101,7 @@ class Keyboard(agent.Agent):
 
         self[100] = VirtualKey(self.kbd_keys)
 
-        self.koutput = bundles.Splitter(self.domain,self[1],self[2],self[3],self[4],self[17])
+        self.koutput = bundles.Splitter(self.domain,self[2],self[3],self[4],self[17])
         self.kpoly = piw.polyctl(10,self.koutput.cookie(),False,5)
         self.s1output = bundles.Splitter(self.domain,self[5],self[10])
         self.boutput = bundles.Splitter(self.domain,self[7])
@@ -152,6 +150,10 @@ class Keyboard(agent.Agent):
     def set_controller(self):
         self[9] = atom.Atom(names='controller output',domain=domain.Aniso(),init=self.controllerinit())
   
+    def set_keybounce(self):
+        self[230] = atom.Atom(domain=domain.BoundedFloat(0,31500), init=20000, protocols='input output', names='debounce time', policy=atom.default_policy(self.keyboard.debounce_time))
+        self.keyboard.debounce_time(self[230].get_value())
+
     def set_threshhold(self):
         self[241] = atom.Atom(domain=domain.BoundedInt(0,4095), init=self.keyboard.get_pedal_min(1), protocols='input output explicit', names='pedal minimum threshold', ordinal=1, policy=atom.default_policy(lambda v: self.__set_min(1,v)))
         self[242] = atom.Atom(domain=domain.BoundedInt(0,4095), init=self.keyboard.get_pedal_max(1), protocols='input output explicit', names='pedal maximum threshold', ordinal=1, policy=atom.default_policy(lambda v: self.__set_max(1,v)))
@@ -200,7 +202,7 @@ class Keyboard(agent.Agent):
         self.__setpedal(pedal)
 
     def controllerinit(self):
-        return utils.makedict({'courselen':self.keyboard.get_courses(),'rowlen':self.keyboard.get_courses()},0)
+        return utils.makedict({'columnlen':self.keyboard.get_columnlen(),'columnoffset':self.keyboard.get_columnoffset(),'courselen':self.keyboard.get_courselen(),'courseoffset':self.keyboard.get_courseoffset()},0)
 
     def close_server(self):
         agent.Agent.close_server(self)
@@ -230,11 +232,11 @@ class MicrophoneOutput(audio.AudioOutput):
         audio.AudioOutput.__init__(self,self.__agent.audio_output,1,1,names='microphone')
 
         self[100] = toggle.Toggle(self.__enable,self.__agent.domain,container=(None,'microphone enable',self.__agent.verb_container()),names='enable',transient=True)
-        self[101] = atom.Atom(domain=domain.String(),init='electret',names='type',policy=atom.default_policy(self.__type))
-        self[102] = atom.Atom(domain=domain.BoundedInt(0,50,hints=(T('inc',1),T('biginc',5),T('control','updown'))),names='gain',init=30,policy=atom.default_policy(self.__gain))
+        self[101] = atom.Atom(domain=domain.StringEnum(*sorted(self.mic_types.keys())),init='electret',names='type',policy=atom.default_policy(self.__type))
+        self[102] = atom.Atom(domain=domain.BoundedInt(0,50,hints=(T('stageinc',1),T('inc',1),T('biginc',5),T('control','updown'))),names='gain',init=30,policy=atom.default_policy(self.__gain))
         self[103] = toggle.Toggle(self.__pad,self.__agent.domain,container=(None,'microphone pad',self.__agent.verb_container()),names='pad')
         self[104] = toggle.Toggle(self.__loop_enable,self.__agent.domain,container=(None,'microphone loop',self.__agent.verb_container()),names='loop')
-        self[105] = atom.Atom(domain=domain.BoundedInt(0,120,hints=(T('inc',1),T('biginc',5),T('control','updown'))),names='loop gain',init=100,policy=atom.default_policy(self.__loop_gain))
+        self[105] = atom.Atom(domain=domain.BoundedInt(0,120,hints=(T('stageinc',1),T('inc',1),T('biginc',5),T('control','updown'))),names='loop gain',init=100,policy=atom.default_policy(self.__loop_gain))
         self[106] = toggle.Toggle(self.__mute_enable,self.__agent.domain,container=(None,'microphone mute',self.__agent.verb_container()),names='automute')
         self[109] = atom.Atom(domain=domain.BoundedInt(0,4),names='quality',init=2,policy=atom.default_policy(self.__quality))
 
@@ -298,9 +300,10 @@ class HeadphoneInput(audio.AudioInput):
         self.__agent = agent
         audio.AudioInput.__init__(self,self.__agent.audio_input,1,2,names='headphone')
         self[100] = toggle.Toggle(self.__enable,self.__agent.domain,container=(None,'headphone',self.__agent.verb_container()),names='enable')
-        self[101] = atom.Atom(domain=domain.BoundedInt(0,127,hints=(T('inc',1),T('biginc',5),T('control','updown'))),names='gain',init=70,policy=atom.default_policy(self.__gain))
+        self[101] = atom.Atom(domain=domain.BoundedInt(0,127,hints=(T('stageinc',1),T('inc',1),T('biginc',5),T('control','updown'))),names='gain',init=70,policy=atom.default_policy(self.__gain))
         self[102] = atom.Atom(domain=domain.BoundedInt(0,4),names='quality',init=0,policy=atom.default_policy(self.__quality))
         self[103] = atom.Atom(domain=domain.Bool(),names='limit',init=True,policy=atom.default_policy(self.__limit))
+        self[103].set_property_string('show_warning','BY CHANGING THE PRESET HEADPHONE LIMIT YOU ABSOLVE EIGENLABS LTD OF ALL LIABILITY FOR ANY HEARING DAMAGE THAT MAY BE CAUSED AS A RESULT OF SUCH ACTIONS')
 
     def server_opened(self):
         audio.AudioInput.server_opened(self)
@@ -340,6 +343,7 @@ class Keyboard_Alpha2( Keyboard ):
         self.nativekeyboard_setup()
         self.set_controller() #define in base class 
         self.set_threshhold() #define in base class 
+        self.set_keybounce();
         self.setup_leds() #define in base class 
 
     def rpc_dinfo(self,arg):
@@ -420,6 +424,7 @@ class Keyboard_Tau( Keyboard ):
         self.set_controller() #define in base class 
         self.set_threshhold() #define in base class 
         self.setup_leds() #define in base class 
+        self.set_keybounce();
 
     def rpc_dinfo(self,arg):
         l=[]
@@ -434,41 +439,30 @@ class Keyboard_Tau( Keyboard ):
         self[103] = HeadphoneInput(self)
 
     def controllerinit(self):
-        return utils.makedict({'courselen':self.keyboard.get_courses(),'rowlen':self.keyboard.get_courses()},0)
+        return utils.makedict({'columnlen':self.keyboard.get_columnlen(),'columnoffset':self.keyboard.get_columnoffset(),'courselen':self.keyboard.get_courselen(),'courseoffset':self.keyboard.get_courseoffset()},0)
 
     def nativekeyboard_setup(self):
         self.keyboard=keyboard_native.tau_bundle(self.usbdev,self.kclone.cookie(),utils.notify(self.dead))
         self.audio_input_setup()
 
 
-class Keyboard_Alpha1( Keyboard ):
-
-    def __init__(self,usbname,ordinal,dom,remove):
-        self.usbname = usbname
-        Keyboard.__init__(self,'alpha keyboard',ordinal,dom,remove,132)
-        self.nativekeyboard_setup()
-        self.set_threshhold() #define in base class 
-        self.setup_leds() #define in base class 
-
-    def nativekeyboard_setup(self):
-        self.keyboard=keyboard_native.bundle(self.usbname,self.kclone.cookie(),utils.notify(self.dead))
-
-
 class BaseStation:
     def __init__(self,usbname,agent):
         self.__usbname = usbname
-        self.__device = picross.usbdevice(usbname,0)
         self.__agent = agent
         self.__thing = piw.thing()
-        piw.tsd_thing(self.__thing)
+        self.__device = 0
         self.__instrument = 0
+        self.__kbd = None
+        piw.tsd_thing(self.__thing)
         self.__thing.set_slow_timer_handler(utils.notify(self.__poll))
         self.__counter = itertools.cycle([1]+[0]*20)
-        self.__kbd = None
         self.__thing.timer_slow(1000)
 
     @utils.nothrow
     def __poll(self):
+        if not self.__device:
+            self.__device = picross.usbdevice(self.__usbname,0)
         basecfg = self.bs_config_read()
         instcfg = self.inst_config_read()
         if self.__counter.next():
@@ -499,6 +493,9 @@ class BaseStation:
             self.__kbd = None
             k.dead()
         self.__thing.close_thing()
+        self.__device.close()
+        self.__device = 0
+        self.__instrument = 0
 
 
 class KeyboardFactory( agent.Agent ):
@@ -516,17 +513,12 @@ class KeyboardFactory( agent.Agent ):
         self.__enum = []
         
         lsf = lambda c: picross.make_string_functor(utils.make_locked_callable(c))
-        self.__enum.append(picross.enumerator(0x049f,0x505a,lsf(self.add_alpha1keyboard)))
         self.__enum.append(picross.enumerator(0xbeca,0x0102,lsf(self.add_alpha2keyboard)))
         self.__enum.append(picross.enumerator(0xbeca,0x0103,lsf(self.add_taukeyboard)))
         self.__enum.append(picross.enumerator(0x2139,0x0002,lsf(self.download_base_station)))
         self.__enum.append(picross.enumerator(0x2139,0x0003,lsf(self.download_psu)))
         self.__enum.append(picross.enumerator(0x2139,0x0104,lsf(self.add_base_station),lsf(self.del_base_station)))
         self.__enum.append(picross.enumerator(0x2139,0x0105,lsf(self.add_base_station),lsf(self.del_base_station)))
-
-    def add_alpha1keyboard( self, usbname):
-        msg = 'alpha1:%s' % usbname
-        self.__thing.enqueue_slow(piw.makestring(msg,0))
 
     def add_taukeyboard( self, usbname ):
         msg = 'tau:%s' % usbname
@@ -566,10 +558,24 @@ class KeyboardFactory( agent.Agent ):
         for e in self.__enum:
             e.start()
 
-    def server_closed(self):
+    def cleanup(self):
+        print 'closing instruments'
         for e in self.__enum:
-            e.stop()
-        agent.Agent.server_closed(self)  
+            try: e.stop()
+            except: pass
+        self.__enum = []
+        print 'closing base stations'
+        for e in self.__base.values():
+            try: e.close()
+            except: pass
+        self.__base = dict()
+
+    def close_server(self):
+        self.cleanup()
+        agent.Agent.close_server(self)  
+
+    def on_quit(self):
+        self.cleanup()
 
     def next_keyboard(self):
         i=0
@@ -604,9 +610,7 @@ class KeyboardFactory( agent.Agent ):
             
         i=self.next_keyboard()
 
-        if version == 'alpha1': 
-            k = Keyboard_Alpha1(name,i,self.domain,lambda: self.del_keyboard(i))
-        elif version == 'alpha2':
+        if version == 'alpha2':
             k = Keyboard_Alpha2(i,self.domain,lambda:self.del_keyboard(i),usbname=name)
         else:
             k = Keyboard_Tau(i,self.domain,lambda:self.del_keyboard(i),usbname=name)

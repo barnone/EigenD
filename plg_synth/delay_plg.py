@@ -21,9 +21,9 @@
 import sys
 import piw
 import picross
-import synth_native
 from pi import agent,atom,bundles,domain,paths,upgrade,policy,utils,action,async,collection
-from plg_synth import delay_version as version
+from pi.logic.shortcuts import T
+from . import delay_version as version,synth_native
 
 class Channel(atom.Atom):
     
@@ -49,7 +49,7 @@ class Channel(atom.Atom):
         # filter enable
         self[3]=atom.Atom(domain=domain.Bool(), init=True, names="filter", protocols='input', policy=self.input.policy(chan_num*sigs+3,False))
         # filter cutoff
-        self[4]=atom.Atom(domain=domain.BoundedFloat(0,20000), init=2000, names="cutoff", protocols='input', policy=self.input.policy(chan_num*sigs+4,False))
+        self[4]=atom.Atom(domain=domain.BoundedFloat(0,20000,hints=(T('stageinc',100),T('inc',100),T('biginc',10000),T('control','updown'))), init=2000, names="cutoff", protocols='input', policy=self.input.policy(chan_num*sigs+4,False))
         # feedback to left channel, explicit stops an implicit connect (e.g. to an left audio input)
         self[5]=atom.Atom(domain=domain.BoundedFloat(0,1), init=l_pan_init, names="left gain", protocols='input explicit', policy=self.input.policy(chan_num*sigs+5,False))
         # feedback to right channel
@@ -193,7 +193,7 @@ class Agent(agent.Agent):
         self.add_verb2(1,'create([],None,role(None,[matches([tap])]))',self.__create_tap)
         
         # verb to uncreate a tap, tap number is given, #7 is self[7]
-        self.add_verb2(2,'create([un],None,role(None,[partof(~(a)"#7")]))',self.__uncreate_tap)
+        self.add_verb2(2,'create([un],None,role(None,[partof(~(a)#7)]))',self.__uncreate_tap)
 
         # verb to reset delay lines
         self.add_verb2(3, 'clear([],None)', self.__reset_delay_lines)

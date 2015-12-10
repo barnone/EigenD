@@ -642,7 +642,7 @@ namespace
                 e->cfilterenv_output(i+1, audio_out[i]);
                 // clear the last_audio_ inputs to prevent the input buffer cycling
                 // when the input event stop
-                last_audio_[i].clear();
+                last_audio_[i].clear_nb();
             }
 
             if(lingering_)
@@ -811,6 +811,14 @@ namespace
 #endif // DELAY_DEBUG>1
 
             float time_samples = time_beats*(sample_rate/(tempo_/60));
+            if(0 == tempo_)
+            {
+                time_samples = 0;
+            }
+            else
+            {
+                time_samples = time_beats*(sample_rate/(tempo_/60));
+            }
             set_tap_time_samps(tap_num, channel, time_samples, sample_rate);
 
             unsigned tap_index = 0;

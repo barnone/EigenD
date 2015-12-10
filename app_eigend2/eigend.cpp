@@ -26,6 +26,7 @@
 #include <picross/pic_resources.h>
 
 #include "eigend.h"
+#include "nettest.h"
 
 #include <lib_juce/ejuce.h>
 #include <lib_juce/ejuce_laf.h>
@@ -39,6 +40,7 @@
 #include "jucer/AboutComponent.h"
 #include "jucer/BugComponent.h"
 #include "jucer/AlertComponent1.h"
+#include "jucer/ModalComponent.h"
 #include "jucer/AlertComponent2.h"
 #include "jucer/HelpComponent.h"
 #include "jucer/InfoComponent.h"
@@ -70,7 +72,6 @@ static const char *save_help_text = ""
 "Words typed in as text must exist in the Belcanto Dictionary (which can be seen in the EigenD Commander). If you want to save a Setup by using Belcanto notes, these must be from 1 to 8. If you are saving a Setup using notes you are not confined to Belcanto words in the dictionary. You can use any sequence of notes in the major scale (typed in a numbers 1-8) as words. If they appear in the Dictionary, you will see the text translation appear in the text input box. Words that have no translation into text will appear with a '!' in front of them to let you know that they are not a number but a new Belcanto word. \n"
 "\n"
 "When you go to load a Setup you will see that all your saved Setups are arranged in a hierarchy which uses each part of the Belcanto name as a level. This, along with the tags, helps you to organise and remember large collections of Setups.\n";
-
 
 #ifdef PI_MACOSX
 #define TOOL_BROWSER "EigenBrowser"
@@ -109,6 +110,7 @@ enum EigenCommands
     commandAbout = 1000,
     commandStartStatus,
     commandStartSave,
+    commandStartSaveAs,
     commandStartLoad,
     commandStartBug,
     commandStartBrowser,
@@ -116,6 +118,7 @@ enum EigenCommands
     commandStartScanner,
     commandStartStage,
     commandStartWorkbench,
+    commandLibraryDirectory,
     commandMainWindow,
     commandQuit,
     commandDownload,
@@ -131,47 +134,67 @@ class EigenAlertDelegate
         virtual void alert_cancel() {}
 };
 
-class EigenAlertComponent2: public AlertComponent2
+class EigenDialogContent
+{
+    public:
+        virtual bool returnKeyPressed() { return false; }
+};
+
+class EigenAlertComponent2: public AlertComponent2, EigenDialogContent
 {
     public:
         EigenAlertComponent2(EigenMainWindow *main,const String &klass,const String &label, const String &text, EigenAlertDelegate *listener);
         ~EigenAlertComponent2();
         void set_listener(EigenAlertDelegate *l);
         void buttonClicked (Button* b);
+        bool returnKeyPressed() { buttonClicked(get_ok_button()); return true; }
 
     private:
         EigenMainWindow *main_;
         EigenAlertDelegate *listener_;
 };
 
-class EigenAlertComponent1: public AlertComponent1
+class EigenAlertComponent1: public AlertComponent1, public EigenDialogContent
 {
     public:
         EigenAlertComponent1(EigenMainWindow *main,const String &klass,const String &label, const String &text);
         ~EigenAlertComponent1();
         void buttonClicked (Button* buttonThatWasClicked);
+        bool returnKeyPressed() {  buttonClicked(get_ok_button()); return true; }
 
     private:
         EigenMainWindow *main_;
 };
 
-class EigenInfoComponent: public InfoComponent
+class EigenInfoComponent: public InfoComponent, public EigenDialogContent
 {
     public:
         EigenInfoComponent(EigenMainWindow *main,const String &klass,const String &label, const String &text);
         ~EigenInfoComponent();
         void buttonClicked (Button* buttonThatWasClicked);
+        bool returnKeyPressed() {  buttonClicked(get_ok_button()); return true; }
 
     private:
         EigenMainWindow *main_;
 };
 
-class EigenHelpComponent: public HelpComponent
+class EigenLoadProgressComponent: public LoadProgressComponent, public EigenDialogContent
+{
+    public:
+        EigenLoadProgressComponent() {}
+        ~EigenLoadProgressComponent() {}
+
+    private:
+        EigenMainWindow *main_;
+};
+
+class EigenHelpComponent: public HelpComponent, public EigenDialogContent
 {
     public:
         EigenHelpComponent(EigenMainWindow *main,const String &klass,const String &label, const String &text);
         ~EigenHelpComponent();
         void buttonClicked (Button* buttonThatWasClicked);
+        bool returnKeyPressed() {  buttonClicked(get_ok_button()); return true; }
 
     private:
         EigenMainWindow *main_;
@@ -192,14 +215,19 @@ class EigenLogger
         pic::f_string_t logger_;
 };
 
-class EigenDialog: public DocumentWindow
+class EigenDialog: public DocumentWindow, public KeyListener, public MessageListener
 {
     public:
         EigenDialog(EigenMainWindow *main,Component *content,int,int,int,int,int,int,Component *position = 0);
         void closeButtonPressed();
         ~EigenDialog();
+        bool keyPressed (const KeyPress& key, Component* originatingComponent);
+        bool keyStateChanged (bool isKeyDown, Component* originatingComponent);
+        void handleMessage(const Message &m);
+
     private:
         EigenMainWindow *main_;
+        Component *component_;
 };
 
 class EigenMainWindow: public DocumentWindow, public MenuBarModel, public piw::thing_t, public eigend::p2c_t, public ApplicationCommandTarget
@@ -226,11 +254,14 @@ class EigenMainWindow: public DocumentWindow, public MenuBarModel, public piw::t
         const StringArray getMenuBarNames();
         void menuItemSelected  (int menuItemID, int topLevelMenuIndex);
         void setups_changed(const char *file);
-        EigenDialog *alert1(const String &klass, const String &label, const String &text);
+        EigenDialog *alert1(const String &klass, const String &label, const String &text, bool left=false);
         EigenDialog *alert2(const String &klass, const String &label, const String &text, EigenAlertDelegate *listener);
         EigenDialog *info(const String &klass, const String &label, const String &text);
         void ignore_klass(const juce::String &klass);
         bool select_setup(const char *setup);
+        void load_setup(const char *setup, bool user);
+        void save();
+        void save_dialog();
         void save_dialog(const std::string &current);
         void edit_dialog(const std::string &current);
         void alert_dialog(const char *klass, const char *label, const char *text);
@@ -240,6 +271,8 @@ class EigenMainWindow: public DocumentWindow, public MenuBarModel, public piw::t
         void set_latest_release(const char *);
         std::string get_cookie();
         std::string get_os();
+        void enable_save_menu(bool active);
+        bool do_quit();
 
     private:
         EigenLoadComponent *component_;
@@ -264,6 +297,7 @@ class EigenMainWindow: public DocumentWindow, public MenuBarModel, public piw::t
         EigenDialog *progress_;
         EigenDialog *help_;
         juce::PropertiesFile ignores_;
+        bool save_menu_active_;
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(EigenMainWindow);
 };
@@ -281,15 +315,17 @@ class EigenD : public ejuce::Application, virtual public pic::tracked_t
         void anotherInstanceStarted (const String& commandLine);
         void log(const char *msg);
         void handleWinch(const std::string &msg);
+        void systemRequestedQuit();
 
     private:
-        EigenMainWindow *main_window_;
+        EigenMainWindow * volatile main_window_;
         epython::PythonInterface *python_;
         pia::context_t context_;
         FILE *logfile_;
+        pic::lockfile_t lockfile_;
 };
 
-class EigenSaveComponent: public SaveDialogComponent, public EigenAlertDelegate
+class EigenSaveComponent: public SaveDialogComponent, public EigenAlertDelegate, public EigenDialogContent
 {
     public:
         EigenSaveComponent(EigenMainWindow *mediator, const std::string &current);
@@ -308,7 +344,7 @@ class EigenSaveComponent: public SaveDialogComponent, public EigenAlertDelegate
         int max_;
 };
 
-class EigenEditComponent: public EditDialogComponent
+class EigenEditComponent: public EditDialogComponent, public EigenDialogContent
 {
     public:
         EigenEditComponent(EigenMainWindow *mediator, const std::string &current);
@@ -321,7 +357,7 @@ class EigenEditComponent: public EditDialogComponent
         std::string orig_;
 };
 
-class EigenBugComponent: public BugComponent
+class EigenBugComponent: public BugComponent, public EigenDialogContent
 {
     public:
         EigenBugComponent(EigenMainWindow *mediator);
@@ -359,7 +395,7 @@ class EigenLoadComponent: public LoadDialogComponent, public EigenAlertDelegate
 {
     public:
         EigenLoadComponent(EigenMainWindow *mediator);
-        void updateUpgradeToggle(bool enabled);
+        void updateSaveButton(bool enabled);
         void updateSetupButtons(bool term, bool user);
         void selected(const piw::term_t &term, bool dbl);
         void buttonClicked(Button *b);
@@ -367,6 +403,8 @@ class EigenLoadComponent: public LoadDialogComponent, public EigenAlertDelegate
         virtual ~EigenLoadComponent();
         EigenMainWindow *mediator() { return mediator_; }
         bool select_setup(const char *setup);
+        void clear_selection();
+        bool is_selected_user();
         void alert_ok();
         void alert_cancel();
         void cancel_confirm();
@@ -377,29 +415,26 @@ class EigenLoadComponent: public LoadDialogComponent, public EigenAlertDelegate
         EigenTreeItem *model_;
         piw::data_t slot_;
         piw::data_t selected_;
+        bool user_;
 };
 
 void EigenTreeItem::itemSelectionChanged(bool isNowSelected)
 {
     if(isNowSelected)
     {
-        pic::logmsg() << "item selected" << term_.render();
         if(term_.arity()>2)
         {
             view_->selected(term_,false);
         }
         else
         {
-            view_->getDefaultToggle()->setToggleState(false,false);
-            view_->updateSetupButtons(false, false);
-            view_->updateUpgradeToggle(false);
+            view_->clear_selection();
         }
     }
 }
 
 void EigenTreeItem::itemDoubleClicked(const MouseEvent &)
 {
-    pic::logmsg() << "item dbl clicked " << term_.render();
     if(term_.arity()>2)
     {
         view_->selected(term_,true);
@@ -407,7 +442,6 @@ void EigenTreeItem::itemDoubleClicked(const MouseEvent &)
     else
     {
         view_->updateSetupButtons(false, false);
-        view_->updateUpgradeToggle(false);
     }
 }
 
@@ -416,7 +450,7 @@ piw::data_t EigenTreeItem::name()
     return term_.arg(0).value();
 }
 
-class EigenStatusComponent: public StatusComponent
+class EigenStatusComponent: public StatusComponent, public EigenDialogContent
 {
     public:
         EigenStatusComponent(EigenMainWindow *mediator);
@@ -426,7 +460,7 @@ class EigenStatusComponent: public StatusComponent
         EigenMainWindow *mediator_;
 };
 
-class EigenAboutComponent: public AboutComponent
+class EigenAboutComponent: public AboutComponent, public EigenDialogContent
 {
     public:
         EigenAboutComponent(EigenMainWindow *mediator);
@@ -486,7 +520,7 @@ bool EigenMainWindow::perform (const InvocationInfo& info)
         case commandStartStage:
             stage_.start();
             break;
-            
+
         case commandStartBug:
             if(!bug_)
             {
@@ -495,6 +529,10 @@ bool EigenMainWindow::perform (const InvocationInfo& info)
             break;
 
         case commandStartSave:
+            save();
+            break;
+
+        case commandStartSaveAs:
             save_dialog(current_setup_);
             break;
 
@@ -503,6 +541,12 @@ bool EigenMainWindow::perform (const InvocationInfo& info)
             {
                 setVisible(true);
                 menuItemsChanged();
+            }
+            break;
+
+        case commandLibraryDirectory:
+            {
+                ejuce::pathToURL(pic::global_library_dir()).launchInDefaultBrowser();
             }
             break;
 
@@ -516,18 +560,21 @@ bool EigenMainWindow::perform (const InvocationInfo& info)
             break;
 
         case commandQuit:
-            backend_->prepare_quit();
-//#ifdef JUCE_WINDOWS
-//            TerminateProcess(GetCurrentProcess(),0);
-//#else
-            JUCEApplication::quit();
-//#endif
+            JUCEApplication::getInstance()->systemRequestedQuit();
             break;
 
         case commandDownload:
             {
-                URL u(T("http://www.eigenlabs.com/downloads/releases/"));
-                u.launchInDefaultBrowser();
+                if(workbench_.isavailable())
+                {
+                    URL u("http://www.eigenlabs.com/downloads/latest/pro/");
+                    u.launchInDefaultBrowser();
+                }
+                else
+                {
+                    URL u("http://www.eigenlabs.com/downloads/latest/std/");
+                    u.launchInDefaultBrowser();
+                }
             }
             break;
 
@@ -547,35 +594,28 @@ void EigenLoadComponent::updateSetupButtons(bool term, bool user)
     getDeleteButton()->setEnabled(term && user);
 }
 
-void EigenLoadComponent::updateUpgradeToggle(bool enabled)
+void EigenLoadComponent::updateSaveButton(bool enabled)
 {
-    getUpgradeToggle()->setEnabled(enabled);
-    getUpgradeToggle()->setToggleState(enabled,false);
+    getSaveButton()->setEnabled(enabled);
 }
 
 void EigenLoadComponent::selected(const piw::term_t &term,bool dbl)
 {
-    slot_=term.arg(3).value();
-    selected_=term.arg(4).value();
-    bool upg=term.arg(5).value().as_bool();
+    slot_ = term.arg(3).value();
+    selected_ = term.arg(4).value();
+    user_ = term.arg(6).value().as_bool();
 
-    pic::logmsg() << "selected " << selected_ << " " << upg;
     std::string d = mediator_->backend()->get_description(selected_.as_string());
     getLabel()->setText(d.c_str(),false);
 
-    updateSetupButtons(true,term.arg(6).value().as_bool());
-    updateUpgradeToggle(upg);
+    updateSetupButtons(true,user_);
 
-    std::string default_setup = mediator_->backend()->get_default_setup(true);
+    std::string default_setup = mediator_->backend()->get_default_setup(false);
     getDefaultToggle()->setToggleState(!default_setup.compare(selected_.as_string()),false);
-
-    pic::logmsg() << "selected2 " << selected_ << " " << upg;
 
     if(dbl)
     {
-	pic::logmsg() << "selected3 " << selected_ << " " << upg;
         buttonClicked(getLoadButton());
-	pic::logmsg() << "selected4 " << selected_ << " " << upg;
     }
 }
 
@@ -602,20 +642,18 @@ void EigenLoadComponent::buttonClicked(Button *b)
 {
     if(b==getLoadButton())
     {
-        pic::logmsg() << "load button " << selected_;
-
         if(selected_.is_string())
         {
-            bool upg = false;
-
-            if(getUpgradeToggle()->isEnabled())
-            {
-                upg = getUpgradeToggle()->getToggleState();
-            }
-
-            pic::logmsg() << "loading " << selected_;
-            mediator_->backend()->load_setup(selected_.as_string(),upg);
+            mediator_->load_setup(selected_.as_string(),user_);
         }
+    }
+    else if (b==getSaveButton())
+    {
+        mediator_->save();
+    }
+    else if (b==getSaveAsButton())
+    {
+        mediator_->save_dialog();
     }
     else if (b==getEditButton())
     {
@@ -655,7 +693,7 @@ void EigenLoadComponent::cancel_confirm()
     }
 }
 
-EigenLoadComponent::EigenLoadComponent(EigenMainWindow *mediator): mediator_(mediator), confirm_(0)
+EigenLoadComponent::EigenLoadComponent(EigenMainWindow *mediator): mediator_(mediator), confirm_(0), user_(false)
 {
     setName(T("Load"));
     model_ = new EigenTreeItem(this,mediator_->backend()->get_setups());
@@ -676,6 +714,11 @@ void EigenLoadComponent::alert_cancel()
     confirm_ = 0;
 }
 
+bool EigenLoadComponent::is_selected_user()
+{
+    return user_;
+}
+
 bool EigenLoadComponent::select_setup(const char *setup)
 {
     bool rv = model_->select_setup(setup);
@@ -694,6 +737,15 @@ bool EigenLoadComponent::select_setup(const char *setup)
     }
 
     return rv;
+}
+
+void EigenLoadComponent::clear_selection()
+{
+    getDefaultToggle()->setToggleState(false,false);
+    updateSetupButtons(false, false);
+    slot_ = piw::data_t();
+    selected_ = piw::data_t();
+    user_ = false;
 }
 
 void EigenLoadComponent::tree_changed()
@@ -779,6 +831,13 @@ std::string EigenMainWindow::get_cookie()
 
 }
 
+void EigenMainWindow::enable_save_menu(bool active)
+{
+    save_menu_active_ = active;
+    menuItemsChanged();
+    component_->updateSaveButton(active);
+}
+
 void EigenMainWindow::set_latest_release(const char *release)
 {
     JUCE_AUTORELEASEPOOL
@@ -794,25 +853,32 @@ void EigenMainWindow::setups_changed(const char *file)
     {
         current_setup_ = file;
         select_setup(file);
+        backend_->set_current_setup(file,component_->is_selected_user());
+        enable_save_menu(component_->is_selected_user());
+    }
+    else
+    {
+        backend_->set_current_setup("",false);
+        enable_save_menu(false);
     }
 }
 
 File getPluginsDir()
 {
-    return File(pic::global_library_dir().c_str()).getChildFile("Plugins");
+    return ejuce::pathToFile(pic::global_library_dir()).getChildFile("Plugins");
 }
 
 File getGlobalDir()
 {
-    return File(pic::global_library_dir().c_str()).getChildFile("Global");
+    return ejuce::pathToFile(pic::global_library_dir()).getChildFile("Global");
 }
 
 EigenMainWindow::EigenMainWindow(ApplicationCommandManager *mgr, pia::scaffold_gui_t *scaffold, eigend::c2p_t *backend, const pic::f_string_t &log):
     DocumentWindow (T("eigenD"), Colours::black, DocumentWindow::allButtons, true),
     manager_(mgr), scaffold_(scaffold), backend_(backend), status_(0), saving_(0), editing_(0), about_(0), logger_(log), bug_(0),
-    browser_(pic::private_tools_dir(),TOOL_BROWSER), commander_(pic::private_tools_dir(),TOOL_COMMANDER), scanner_(pic::private_tools_dir(),TOOL_SCANNER), 
-    workbench_(pic::private_tools_dir(),TOOL_WORKBENCH), stage_(pic::public_tools_dir(),TOOL_STAGE),
-    progress_(0), help_(0), ignores_(getGlobalDir().getChildFile(T("ignores")), PropertiesFile::Options())
+    browser_(pic::private_tools_dir(),TOOL_BROWSER), commander_(pic::private_tools_dir(),TOOL_COMMANDER), scanner_(pic::private_tools_dir(),TOOL_SCANNER),
+    workbench_(pic::public_tools_dir(),TOOL_WORKBENCH), stage_(pic::public_tools_dir(),TOOL_STAGE),
+    progress_(0), help_(0), ignores_(getGlobalDir().getChildFile(T("ignores.xml")), PropertiesFile::Options()), save_menu_active_(false)
 {
     backend->upgrade_setups();
 
@@ -821,9 +887,10 @@ EigenMainWindow::EigenMainWindow(ApplicationCommandManager *mgr, pia::scaffold_g
     centreWithSize (getWidth(), getHeight());
     setUsingNativeTitleBar(true);
     setResizable(true,true);
-    setResizeLimits(600,500,2000,2000);
-    setVisible (true);
+    setResizeLimits(600,585,2000,2000);
+    setVisible(true);
     pic::to_front();
+    pic::disable_powersaving();
     toFront(true);
     component_->getSetupLabel()->setText(T(""),false);
 
@@ -841,14 +908,14 @@ EigenMainWindow::EigenMainWindow(ApplicationCommandManager *mgr, pia::scaffold_g
 
     backend->initialise(this,scaffold,get_cookie(),get_os());
 
-    std::string setup = backend->get_default_setup(false);
+    std::string setup = backend->get_default_setup(true);
 
     if(setup.length())
     {
         if(select_setup(setup.c_str()))
         {
             pic::printmsg() << "default setup: " << setup;
-            backend->load_setup(setup.c_str(),false);
+            load_setup(setup.c_str(), component_->is_selected_user());
         }
     }
 
@@ -869,6 +936,26 @@ EigenMainWindow::EigenMainWindow(ApplicationCommandManager *mgr, pia::scaffold_g
 
 EigenMainWindow::~EigenMainWindow()
 {
+    if (status_ != 0) delete status_;
+    if (about_ != 0) delete about_;
+    if (saving_ != 0) delete saving_;
+    if (editing_ != 0) delete editing_;
+    if (bug_ != 0) delete bug_;
+}
+
+bool EigenMainWindow::do_quit()
+{
+    if(!backend_->prepare_quit())
+    {
+        alert_dialog("Save In Progress","Save In Progress","A save operation is in progress.  Please wait for it to complete before quitting");
+        return false;
+    }
+
+#ifdef JUCE_MAC
+    MenuBarModel::setMacMainMenu(nullptr,nullptr);
+#endif
+    setMenuBar(nullptr);
+
     browser_.quit();
     commander_.quit();
     scanner_.quit();
@@ -878,20 +965,16 @@ EigenMainWindow::~EigenMainWindow()
     backend_->quit();
 
     cancel_timer_slow();
-
-    if (status_ != 0) delete status_;
-    if (about_ != 0) delete about_;
-    if (saving_ != 0) delete saving_;
-    if (editing_ != 0) delete editing_;
-    if (bug_ != 0) delete bug_;
+    return true;
 }
 
 void EigenMainWindow::getAllCommands (Array <CommandID>& commands)
 {
-    const CommandID ids[] = { 
+    const CommandID ids[] = {
         commandAbout,
         commandStartStatus,
         commandStartSave,
+        commandStartSaveAs,
         commandStartLoad,
         commandStartBug,
         commandStartBrowser,
@@ -900,6 +983,7 @@ void EigenMainWindow::getAllCommands (Array <CommandID>& commands)
         commandStartStage,
         commandStartWorkbench,
         commandMainWindow,
+        commandLibraryDirectory,
         commandQuit,
         commandDownload,
         commandResetWarnings,
@@ -941,8 +1025,8 @@ void EigenMainWindow::getCommandInfo (const CommandID commandID, ApplicationComm
         if(w<10)
         {
             result.addDefaultKeypress (((char)(w+'0')), ModifierKeys::commandModifier);
-            result.setTicked(scaffold_->window_state(w-1));
         }
+        result.setTicked(scaffold_->window_state(w-1));
         return;
     }
 
@@ -971,6 +1055,7 @@ void EigenMainWindow::getCommandInfo (const CommandID commandID, ApplicationComm
         case commandStartWorkbench:
             result.setInfo (T("Workbench"), T("Workbench"), generalCategory, 0);
             result.addDefaultKeypress (T('k'), ModifierKeys::commandModifier);
+            result.setActive(workbench_.isavailable());
             break;
 
         case commandStartScanner:
@@ -982,7 +1067,7 @@ void EigenMainWindow::getCommandInfo (const CommandID commandID, ApplicationComm
             result.setInfo (T("Stage"), T("Stage"), generalCategory, 0);
             result.addDefaultKeypress (T('g'), ModifierKeys::commandModifier);
             break;
-            
+
         case commandStartBug:
             result.setInfo (T("Report Bug"), T("Report Bug"), generalCategory, 0);
             result.addDefaultKeypress (T('u'), ModifierKeys::commandModifier);
@@ -996,6 +1081,16 @@ void EigenMainWindow::getCommandInfo (const CommandID commandID, ApplicationComm
         case commandStartSave:
             result.setInfo (T("Save Setup"), T("Save Setup"), generalCategory, 0);
             result.addDefaultKeypress (T('s'), ModifierKeys::commandModifier);
+            result.setActive(save_menu_active_);
+            break;
+
+        case commandStartSaveAs:
+            result.setInfo (T("Save Setup As"), T("Save Setup As"), generalCategory, 0);
+            result.addDefaultKeypress (T('s'), ModifierKeys::commandModifier|ModifierKeys::shiftModifier);
+            break;
+
+        case commandLibraryDirectory:
+            result.setInfo (T("Open Library Directory"), T("Open Library Directory"), generalCategory, 0);
             break;
 
         case commandMainWindow:
@@ -1018,7 +1113,7 @@ void EigenMainWindow::getCommandInfo (const CommandID commandID, ApplicationComm
             break;
 
         case commandResetWarnings:
-            result.setInfo (T("Reset warnings"), T("Reset warnings"), generalCategory, 0);
+            result.setInfo (T("Reset Warnings"), T("Reset Warnings"), generalCategory, 0);
             break;
     }
 }
@@ -1036,8 +1131,10 @@ const PopupMenu EigenMainWindow::getMenuForIndex (int topLevelMenuIndex, const S
     {
         menu.addCommandItem (manager(),commandStartLoad);
         menu.addCommandItem (manager(),commandStartSave);
+        menu.addCommandItem (manager(),commandStartSaveAs);
         menu.addSeparator();
         menu.addCommandItem (manager(),commandStartBug);
+        menu.addSeparator();
         menu.addCommandItem (manager(),commandAbout);
 #ifndef PI_MACOSX
         menu.addSeparator();
@@ -1071,6 +1168,7 @@ const PopupMenu EigenMainWindow::getMenuForIndex (int topLevelMenuIndex, const S
         menu.addCommandItem (manager(),commandStartScanner);
         menu.addSeparator();
         menu.addCommandItem (manager(),commandResetWarnings);
+        menu.addCommandItem (manager(),commandLibraryDirectory);
     }
 
     if (topLevelMenuIndex == 3)
@@ -1096,6 +1194,12 @@ void EigenMainWindow::set_cpu(unsigned cpu)
     }
 }
 
+void EigenMainWindow::load_setup(const char *setup, bool user)
+{
+    backend_->load_setup(setup,user);
+    enable_save_menu(user);
+}
+
 void EigenMainWindow::load_started(const char *setup)
 {
     JUCE_AUTORELEASEPOOL
@@ -1110,7 +1214,7 @@ void EigenMainWindow::load_started(const char *setup)
         progress_ = 0;
     }
 
-    LoadProgressComponent *c = new LoadProgressComponent();
+    EigenLoadProgressComponent *c = new EigenLoadProgressComponent();
     juce::String title = T("Loading ");
     title += setup;
     c->setName(title);
@@ -1313,7 +1417,7 @@ EigenBugComponent::EigenBugComponent(EigenMainWindow *mediator): mediator_(media
     bug_report << "Explain what happened:\n"
         << "\n\n"
         << "System information:\n"
-        << "OS: " << SystemStats::getOperatingSystemName().toUTF16() << " "
+        << "OS: " << SystemStats::getOperatingSystemName() << " "
 
 #if JUCE_MAC
         << "10." << SystemStats::getOSXMinorVersionNumber() << ", "
@@ -1364,6 +1468,8 @@ void EigenBugComponent::buttonClicked (Button* buttonThatWasClicked)
             std::string(description_editor()->getText().trim().getCharPointer())
             );
 
+    pic::bgprocess_t(pic::private_exe_dir(),"eigenbugreporter",true).start();
+
     delete getTopLevelComponent();
 }
 
@@ -1389,7 +1495,6 @@ unsigned EigenSaveComponent::getUserNumber(const juce::String &tag)
 
 EigenSaveComponent::EigenSaveComponent(EigenMainWindow *mediator, const std::string &current): mediator_(mediator), confirm_(0)
 {
-    pic::logmsg() << "save component " << current;
     setName(T("Save"));
     term_ = mediator->backend()->get_user_setups();
     max_ = 0;
@@ -1677,8 +1782,6 @@ void EigenSaveComponent::alert_cancel()
 
 EigenEditComponent::EigenEditComponent(EigenMainWindow *mediator, const std::string &current): mediator_(mediator)
 {
-    pic::logmsg() << "edit component " << current;
-
     term_ = mediator->backend()->get_user_setups();
 
     for(unsigned i=1;i<term_.arity();i++)
@@ -1736,7 +1839,7 @@ bool EigenMainWindow::select_setup(const char *setup)
     return component_->select_setup(setup);
 }
 
-EigenDialog::EigenDialog(EigenMainWindow *main,Component *content,int w,int h,int mw,int mh,int xw,int xh,Component *position): DocumentWindow(content->getName(), Colours::black, DocumentWindow::closeButton, true), main_(main)
+EigenDialog::EigenDialog(EigenMainWindow *main,Component *content,int w,int h,int mw,int mh,int xw,int xh,Component *position): DocumentWindow(content->getName(), Colours::black, DocumentWindow::closeButton, true), main_(main), component_(content)
 {
     setContentOwned(content, true);
     setSize(w,h);
@@ -1760,6 +1863,51 @@ EigenDialog::EigenDialog(EigenMainWindow *main,Component *content,int w,int h,in
         setResizable (true, true);
     }
 
+    addKeyListener(this);
+
+}
+
+void EigenDialog::handleMessage (const Message &m)
+{
+    if(m.intParameter1)
+    {
+        EigenDialogContent *c = dynamic_cast<EigenDialogContent *>(component_);
+
+        if(c)
+        {
+            c->returnKeyPressed();
+        }
+    }
+    else
+    {
+        closeButtonPressed();
+    }
+}
+
+bool EigenDialog::keyPressed (const KeyPress& key, Component* originatingComponent)
+{
+    if(key.getKeyCode() == KeyPress::escapeKey)
+    {
+        postMessage(new Message(0,0,0,0));
+        return true;
+    }
+
+    if(key.getKeyCode() == KeyPress::returnKey)
+    {
+        EigenDialogContent *c = dynamic_cast<EigenDialogContent *>(component_);
+
+        if(c)
+        {
+            postMessage(new Message(1,0,0,0));
+        }
+    }
+
+    return false;
+}
+
+bool EigenDialog::keyStateChanged (bool isKeyDown, Component* originatingComponent)
+{
+    return false;
 }
 
 void EigenDialog::closeButtonPressed()
@@ -1773,7 +1921,7 @@ EigenDialog::~EigenDialog()
     main_->dialog_dead(this);
 }
 
-EigenD::EigenD(): main_window_ (0), python_(0), logfile_(0)
+EigenD::EigenD(): main_window_ (0), python_(0), logfile_(0), lockfile_("EigenD")
 {
 }
 
@@ -1787,7 +1935,19 @@ void EigenD::initialise (const String& commandLine)
     pic_mlock_code();
     pic_init_time();
 
+    if(!lockfile_.lock())
+    {
+        ModalComponent mc;
+        mc.getTitle()->setText("eigenD is already running",false);
+        mc.getText()->setText("Another instance of eigenD is already running.  You have to close it before running eigenD again.",false);
+        DialogWindow::showModalDialog("Another eigenD Running",&mc,0,Colour(0xffababab),true,false);
+        quit();
+        return;
+    }
+
     printf("release root: %s\n",pic::release_root_dir().c_str());
+
+    pic::bgprocess_t(pic::private_exe_dir(),"eigenbugreporter",true).start();
 
     pic::f_string_t primary_logger = pic::f_string_t::method(this,&EigenD::log);
     pic::f_string_t eigend_logger = EigenLogger::create("eigend",primary_logger);
@@ -1812,7 +1972,7 @@ void EigenD::initialise (const String& commandLine)
 
             if(logfile.length()>0)
             {
-                logfile_ = fopen(logfile.c_str(),"w");
+                logfile_ = pic::fopen(logfile,"w");
             }
 
             main_window_ = new EigenMainWindow(manager,scaffold(),backend,primary_logger);
@@ -1826,12 +1986,32 @@ void EigenD::initialise (const String& commandLine)
     {
         juce::AlertWindow::showMessageBox(juce::AlertWindow::WarningIcon, "An unexpected error occurred ...", python_->last_error().c_str());
     }
+
+}
+
+void EigenD::systemRequestedQuit()
+{
+    if(main_window_ != 0)
+    {
+        EigenMainWindow *w = main_window_;
+        main_window_ = 0;
+
+        if(!w->do_quit())
+        {
+            main_window_ = w;
+            return;
+        }
+
+        delete w;
+    }
+
+    juce::MessageManager::getInstance()->runDispatchLoopUntil(500);
+    cleanup();
+    ejuce::Application::quit();
 }
 
 void EigenD::shutdown()
 {
-    if (main_window_ != 0) delete main_window_;
-
     ejuce::Application::shutdown();
 }
 
@@ -1847,7 +2027,7 @@ const String EigenD::getApplicationVersion()
 
 bool EigenD::moreThanOneInstanceAllowed()
 {
-    return false;
+    return true;
 }
 
 void EigenD::log(const char *msg)
@@ -1866,7 +2046,6 @@ void EigenD::log(const char *msg)
 
 void EigenD::anotherInstanceStarted (const String& commandLine)
 {
-    pic::logmsg() << "new instance";
 }
 
 EigenStatusComponent::EigenStatusComponent(EigenMainWindow *mediator): mediator_(mediator)
@@ -1905,6 +2084,19 @@ pic::f_string_t EigenMainWindow::make_logger(const char *prefix)
         return EigenLogger::create(prefix,logger_);
 }
 
+void EigenMainWindow::save()
+{
+    if(!backend_->save_current_setup())
+    {
+        save_dialog(current_setup_);
+    }
+}
+
+void EigenMainWindow::save_dialog()
+{
+    save_dialog(current_setup_);
+}
+
 void EigenMainWindow::save_dialog(const std::string &current)
 {
     if(!saving_)
@@ -1927,7 +2119,7 @@ void EigenMainWindow::alert_dialog(const char *klass, const char *label, const c
     alert1(klass,label,text);
 }
 
-EigenDialog *EigenMainWindow::alert1(const String &klass, const String &label, const String &text)
+EigenDialog *EigenMainWindow::alert1(const String &klass, const String &label, const String &text,bool left)
 {
     std::string cklass = std::string(klass.getCharPointer());
 
@@ -1937,6 +2129,12 @@ EigenDialog *EigenMainWindow::alert1(const String &klass, const String &label, c
     }
 
     EigenAlertComponent1 *c = new EigenAlertComponent1(this,klass,label,text);
+
+    if(left)
+    {
+        c->set_left();
+    }
+
     EigenDialog *e = new EigenDialog(this,c,400,600,400,600,2000,2000,this);
 
     std::map<std::string,EigenDialog *>::iterator i;
@@ -1986,7 +2184,7 @@ EigenDialog *EigenMainWindow::info(const String &klass, const String &label, con
     std::string cklass = std::string(klass.getCharPointer());
 
     EigenInfoComponent *c = new EigenInfoComponent(this,klass,label,text);
-    EigenDialog *e = new EigenDialog(this,c,400,300,400,300,2000,2000,this);
+    EigenDialog *e = new EigenDialog(this,c,400,400,400,400,2000,2000,this);
 
     std::map<std::string,EigenDialog *>::iterator i;
 
@@ -2164,6 +2362,11 @@ void EigenD::handleWinch(const std::string &msg)
 {
     JUCE_AUTORELEASEPOOL
 
+    if(!main_window_)
+    {
+        return;
+    }
+
     if(msg.length()==0)
     {
         main_window_->menuItemsChanged();
@@ -2188,7 +2391,7 @@ void EigenD::handleWinch(const std::string &msg)
     juce::String alert_klass = jmsg.substring(0,c1);
     juce::String alert_title = jmsg.substring(c1+1,c2);
     juce::String alert_msg = jmsg.substring(c2+1);
-    
+
     main_window_->alert1(alert_klass,alert_title,alert_msg);
 }
 

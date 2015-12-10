@@ -21,14 +21,13 @@
 import os
 import picross
 import piw
-import midi_native
 
 from pi import atom,bundles,domain,agent,logic,utils,node,action,async,upgrade
-from plg_midi import midi_input_version as version
+from . import midi_input_version as version,midi_native
 
 class VirtualKey(atom.Atom):
     def __init__(self):
-        atom.Atom.__init__(self,names='k',protocols='virtual')
+        atom.Atom.__init__(self,names='key',protocols='virtual')
         self.choices=[]
 
     def __key(self,*keys):
@@ -38,13 +37,12 @@ class VirtualKey(atom.Atom):
     def rpc_resolve(self,arg):
         (a,o) = logic.parse_clause(arg)
         print 'resolving virtual',arg,(a,o)
-        if not a and o is None: return self.__key(*range(1,129))
+        if not a and o is None: return self.__key(*range(0,128))
         if a==('chosen',) and o is None: return self.__key(*self.choices)
         if a or o is None: return self.__key()
-        o=int(o)+1
-        if o<1 or o>128: return self.__key()
+        o=int(o)
+        if o<0 or o>127: return self.__key()
         return self.__key(o)
-
 
 class VirtualCC(atom.Atom):
     clist = (
@@ -90,13 +88,14 @@ class VirtualCC(atom.Atom):
         (a,o) = logic.parse_clause(arg)
         a = (' '.join(a)).lower()
         print 'midi cc resolving',a,o
-        if a in self.cdict: return self.__key(self.cdict[a]+1)
+        if a in self.cdict: return self.__key(self.cdict[a])
         a2 = a+' coarse'
-        if a2 in self.cdict: return self.__key(self.cdict[a2]+1)
-        if not a and o is None: return self.__key(*range(1,129))
+        if a2 in self.cdict: return self.__key(self.cdict[a2])
+        if not a and o is None: return self.__key(*range(0,128))
         if a or o is None: return self.__key()
-        o=int(o)+1
-        if o<1 or o>128: return self.__key()
+        o=int(o)
+        if o<0 or o>127: return self.__key()
+        print 'resolved to',self.__key(o)
         return self.__key(o)
 
     def rpc_enumerate(self,a):
@@ -113,7 +112,7 @@ class VirtualCC(atom.Atom):
     def rpc_fideal(self,arg):
         try:
             (path,cookie) = logic.parse_clause(arg)
-            cookie=int(cookie)+1
+            cookie=int(cookie)
         except:
             utils.log_exception()
             return async.failure('invalid cookie')
@@ -122,9 +121,47 @@ class VirtualCC(atom.Atom):
                 return 'cmp([dsc(~(parent)"#2",%d)])' % val
         return async.failure('invalid cookie')
 
+class VirtualProgramChange(atom.Atom):
+    def __init__(self):
+        atom.Atom.__init__(self,names='program change',protocols='virtual')
+        self.choices=[]
+
+    def __key(self,*keys):
+        x = ','.join(['cmp([dsc(~(parent)"#8","%(k)d")])' % dict(k=k) for k in keys])
+        return '[%s]' % x
+
+    def rpc_resolve(self,arg):
+        (a,o) = logic.parse_clause(arg)
+        print 'resolving virtual',arg,(a,o)
+        if not a and o is None: return self.__key(*range(0,128))
+        if a==('chosen',) and o is None: return self.__key(*self.choices)
+        if a or o is None: return self.__key()
+        o=int(o)
+        if o<0 or o>127: return self.__key()
+        return self.__key(o)
+
+class VirtualTrigger(atom.Atom):
+    def __init__(self):
+        atom.Atom.__init__(self,names='trigger',protocols='virtual')
+        self.choices=[]
+
+    def __key(self,*keys):
+        x = ','.join(['cmp([dsc(~(parent)"#10","%(k)d")])' % dict(k=k) for k in keys])
+        return '[%s]' % x
+
+    def rpc_resolve(self,arg):
+        (a,o) = logic.parse_clause(arg)
+        print 'resolving virtual',arg,(a,o)
+        if not a and o is None: return self.__key(*range(0,128))
+        if a==('chosen',) and o is None: return self.__key(*self.choices)
+        if a or o is None: return self.__key()
+        o=int(o)
+        if o<0 or o>127: return self.__key()
+        return self.__key(o)
+
 class MidiDelegate(midi_native.midi_input):
-    def __init__(self,cookie,midi_cookie,notify):
-        midi_native.midi_input.__init__(self,cookie,midi_cookie)
+    def __init__(self,key_cookie,cc_cookie,pc_cookie,trig_cookie,midi_cookie,notify):
+        midi_native.midi_input.__init__(self,key_cookie,cc_cookie,pc_cookie,trig_cookie,midi_cookie)
         self.sources = []
         self.__notify = notify
 
@@ -150,9 +187,9 @@ class MidiDelegate(midi_native.midi_input):
                 return
 
 class MidiPort(atom.Atom):
-    def __init__(self,cookie,midi_cookie):
+    def __init__(self, key_cookie,cc_cookie,pc_cookie,trig_cookie,midi_cookie):
         self.__timestamp = piw.tsd_time()
-        self.__midi = MidiDelegate(cookie,midi_cookie,self.__update)
+        self.__midi = MidiDelegate(key_cookie,cc_cookie,pc_cookie,trig_cookie,midi_cookie,self.__sinks_changed)
 
         atom.Atom.__init__(self,domain=domain.String(),names='midi port',policy=atom.default_policy(self.setport),protocols='virtual browse')
         self.__midi.setport(0)
@@ -187,6 +224,8 @@ class MidiPort(atom.Atom):
         self.set_property_string('timestamp',str(self.__timestamp))
 
     def setport(self,port):
+        self.set_value(port)
+        self.__update()
         if self.open():
             print 'set port to',port
             if port:
@@ -194,8 +233,9 @@ class MidiPort(atom.Atom):
             else:
                 if len(self.__midi.sources):
                     self.__midi.setport(int(self.__midi.sources[0][0],16))
-        self.set_value(port)
-        self.__update()
+
+    def __sinks_changed(self):
+        self.setport(self.get_value())
 
     def rpc_displayname(self,arg):
         return 'MIDI input ports'
@@ -277,10 +317,15 @@ class Agent(agent.Agent):
         self.domain.set_source(piw.makestring('*',0))
         self.set_private(node.Server(value=piw.makestring('[]',0), change=self.__settrim))
 
-        self[1] = bundles.Output(1,False,names='activation output')
-        self[2] = bundles.Output(2,False,names='continuous controller output')
+        self[1] = bundles.Output(1,False,names='key output')
+        self[2] = bundles.Output(1,False,names='continuous controller output')
+        self[8] = bundles.Output(1,False,names='program change output')
+        self[10] = bundles.Output(1,False,names='trigger output')
 
-        self.output = bundles.Splitter(self.domain,self[1],self[2])
+        self.key_output = bundles.Splitter(self.domain,self[1])
+        self.cc_output = bundles.Splitter(self.domain,self[2])
+        self.programchange_output = bundles.Splitter(self.domain,self[8])
+        self.trigger_output = bundles.Splitter(self.domain,self[10])
 
         self[6] = bundles.Output(1,False,names='midi output')
         self[7] = bundles.Output(2,False,names='midi clock output')
@@ -288,16 +333,18 @@ class Agent(agent.Agent):
 
         self[3] = VirtualKey()
         self[4] = VirtualCC()
-        self[5] = MidiPort(self.output.cookie(),self.midi_output.cookie())
+        self[9] = VirtualProgramChange()
+        self[11] = VirtualTrigger()
+        self[5] = MidiPort(self.key_output.cookie(),self.cc_output.cookie(),self.programchange_output.cookie(),self.trigger_output.cookie(),self.midi_output.cookie())
 
         self.add_verb2(2,'choose([],None,role(None,[ideal([~server,midiport]),singular]))',self.__chooseport)
-        self.add_verb2(3,'invert([],None,role(None,[cmpdsc([~(s)"#2"])]))', self.__invert);
-        self.add_verb2(4,'minimise([],None,role(None,[cmpdsc([~(s)"#2"])]),option(to,[numeric]))', self.__setmin);
-        self.add_verb2(5,'maximise([],None,role(None,[cmpdsc([~(s)"#2"])]),option(to,[numeric]))', self.__setmax);
+        self.add_verb2(3,'invert([],None,role(None,[cmpdsc(~(s)"#2")]))', self.__invert);
+        self.add_verb2(4,'minimise([],None,role(None,[cmpdsc(~(s)"#2")]),option(to,[numeric]))', self.__setmin);
+        self.add_verb2(5,'maximise([],None,role(None,[cmpdsc(~(s)"#2")]),option(to,[numeric]))', self.__setmax);
 
         self.set_ordinal(ordinal)
 
-    def property_change(self,key,value):
+    def property_change(self,key,value,delegate):
         if key == 'ordinal':
             self[5].set_index(self.get_property_long('ordinal',1))
 

@@ -23,20 +23,52 @@
 
 #include "pic_exports.h"
 #include <string>
+#include <stdio.h>
 
 namespace pic
 {
     PIC_DECLSPEC_FUNC(std::string) global_resource_dir();
     PIC_DECLSPEC_FUNC(std::string) release_resource_dir();
     PIC_DECLSPEC_FUNC(std::string) release_root_dir();
+    PIC_DECLSPEC_FUNC(std::string) contrib_root_dir();
+    PIC_DECLSPEC_FUNC(std::string) contrib_compatible_dir();
     PIC_DECLSPEC_FUNC(std::string) global_library_dir();
     PIC_DECLSPEC_FUNC(std::string) release_library_dir();
     PIC_DECLSPEC_FUNC(std::string) python_prefix_dir();
     PIC_DECLSPEC_FUNC(std::string) public_tools_dir();
     PIC_DECLSPEC_FUNC(std::string) private_tools_dir();
+    PIC_DECLSPEC_FUNC(std::string) private_exe_dir();
     PIC_DECLSPEC_FUNC(char) platform_seperator();
     PIC_DECLSPEC_FUNC(std::string) release();
     PIC_DECLSPEC_FUNC(std::string) username();
+    PIC_DECLSPEC_FUNC(int) mkdir(std::string);
+    PIC_DECLSPEC_FUNC(int) mkdir(const char *);
+    PIC_DECLSPEC_FUNC(int) remove(std::string);
+    PIC_DECLSPEC_FUNC(int) remove(const char *);
+    PIC_DECLSPEC_FUNC(FILE) *fopen(std::string, const char *);
+    PIC_DECLSPEC_FUNC(FILE) *fopen(const char *, const char *);
+    PIC_DECLSPEC_FUNC(int) open(std::string, int);
+    PIC_DECLSPEC_FUNC(int) open(std::string, int, int);
+    PIC_DECLSPEC_FUNC(int) open(const char *, int);
+    PIC_DECLSPEC_FUNC(int) open(const char *, int, int);
+    PIC_DECLSPEC_FUNC(std::string) lockfile(const std::string &);
+
+    class PIC_DECLSPEC_CLASS lockfile_t
+    {
+        public:
+            class impl_t;
+
+        public:
+            lockfile_t(const std::string &name);
+            ~lockfile_t();
+
+            bool lock();
+            void unlock();
+
+        private:
+            std::string name_;
+            impl_t *impl_;
+    };
 };
 
 #endif

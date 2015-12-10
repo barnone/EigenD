@@ -18,12 +18,12 @@
 # along with EigenD.  If not, see <http://www.gnu.org/licenses/>.
 #
 
-import re, piw
+import re, lib_midi
 from pi import action,atom,bundles,domain,errors,const
 
 # The parameter delegate requires the following methods:
 #
-# cookie parameter_input(i)          : which gives access to a cookie for a distinct parameter input
+# cookie parameter_input_cookie(i)   : which gives access to a cookie for a distinct parameter input
 # void parameter_name_changed(i)     : notification that the name of a parameter input has changed
 # void map_param(i,mapping_info)     : which sets up a host automation mapping for a parameter
 # void map_midi(i,mapping_info)      : which sets up a midi mapping for a parameter
@@ -36,16 +36,18 @@ from pi import action,atom,bundles,domain,errors,const
 # void set_minimum_decimation(float) : which sets the minimum data decimation rate
 # void set_midi_notes(bool)          : which enables or disables midi notes
 # void set_midi_pitchbend(bool)      : which enables or disables midi pitchbend
+# void set_pitchbend_up(float)    : which sets the number of semitones of a full pitch up
+# void set_pitchbend_down(float)  : which sets the number of semitones of a full pitch down
 class Parameter(atom.Atom):
     def __init__(self,k,delegate,clockdomain):
         self.__delegate = delegate
-        self.__input = bundles.VectorInput(self.__delegate.parameter_input(k),clockdomain,signals=(1,))
+        self.__input = bundles.VectorInput(self.__delegate.parameter_input_cookie(k),clockdomain,signals=(1,))
         self.__index = k
         atom.Atom.__init__(self,domain=domain.Aniso(),policy=self.__input.vector_policy(1,False),
-                            names='parameter',protocols='input explicit',ordinal=k)
+                            names='parameter',protocols='input',ordinal=k)
         self.__delegate.parameter_name_changed(self.__index)
 
-    def property_change(self,key,value):
+    def property_change(self,key,value,delegate):
         if key in ['name','ordinal']:
             self.__delegate.parameter_name_changed(self.__index)
 
@@ -80,6 +82,8 @@ class List(atom.Atom):
         self.add_verb2(22,'set([un],~a,role(None,[matches([midi,pitch,bend])]))',callback=self.__unset_pitchbend)
         self.add_verb2(23,'set([],~a,role(None,[matches([midi,high,resolution,velocity])]))',callback=self.__set_hires_velocity)
         self.add_verb2(24,'set([un],~a,role(None,[matches([midi,high,resolution,velocity])]))',callback=self.__unset_hires_velocity)
+        self.add_verb2(25,'set([],~a,role(None,[matches([upper,pitch,range])]),role(to,[numeric]))',callback=self.__set_pitch_range_upper)
+        self.add_verb2(26,'set([],~a,role(None,[matches([lower,pitch,range])]),role(to,[numeric]))',callback=self.__set_pitch_range_lower)
         for i in range(1,33):
             self[i] = Parameter(i,delegate,clockdomain)
 
@@ -363,12 +367,12 @@ class List(atom.Atom):
             if self.__delegate.is_mapped_param(iparam_number,oparam_number):
                 info = self.__delegate.get_info_param(iparam_number,oparam_number);
             else:
-                info = piw.mapping_info(oparam_number);
+                info = lib_midi.mapping_info(oparam_number);
         elif midi_number != -1:
             if self.__delegate.is_mapped_midi(iparam_number,midi_number):
                 info = self.__delegate.get_info_midi(iparam_number,midi_number)
             else:
-                info = piw.mapping_info(midi_number);
+                info = lib_midi.mapping_info(midi_number);
 
         return (iparam_number,oparam_number,midi_number,info)
 
@@ -401,6 +405,22 @@ class List(atom.Atom):
     def __unset_pitchbend(self,a,prop):
         try:
             self.__delegate.set_midi_pitchbend(False)
+        except RuntimeError,e:
+            return e.message
+
+    def __set_pitch_range_upper(self,a,prop,to):
+        try:
+            to_str = action.abstract_string(to)
+            to_val = float(to_str)
+            self.__delegate.set_pitchbend_up(to_val)
+        except RuntimeError,e:
+            return e.message
+
+    def __set_pitch_range_lower(self,a,prop,to):
+        try:
+            to_str = action.abstract_string(to)
+            to_val = float(to_str)
+            self.__delegate.set_pitchbend_down(to_val)
         except RuntimeError,e:
             return e.message
 

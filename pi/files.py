@@ -70,8 +70,8 @@ class PkgResourceFile(LiteralFile):
 class FileSystemFile:
     def __init__(self,name,label):
         self.__name = name
-        self.__hash = hashlib.md5(open(name,'r').read()).hexdigest()
-        self.__size = os.path.getsize(name)
+        self.__hash = hashlib.md5(pi_resource.file_open(name,'r').read()).hexdigest()
+        self.__size = pi_resource.os_path_getsize(name)
         self.__label = label
         print 'file system file, name=',name,'hash=',self.__hash
 
@@ -82,7 +82,7 @@ class FileSystemFile:
         return self.__size
 
     def data(self,offset,length):
-        f = open(self.__name,'rb')
+        f = pi_resource.file_open(self.__name,'rb')
         f.seek(offset,0)
         if offset+length > self.__size:
             length = self.__size - offset
@@ -151,7 +151,7 @@ class FileCache:
         self.__waiters = {}
 
         try:
-            os.makedirs(self.__cache_dir)
+            pi_resource.os_makedirs(self.__cache_dir)
         except:
             pass
 
@@ -195,14 +195,14 @@ class FileCache:
     @async.coroutine('internal error')
     def __getfile(self,cache_file,size,server,cookie,md5):
 
-        if os.path.exists(cache_file) and os.path.getsize(cache_file)==size:
+        if pi_resource.os_path_exists(cache_file) and pi_resource.os_path_getsize(cache_file)==size:
             print 'returning',server,':',cookie,'from cache'
             yield async.Coroutine.success(cache_file)
 
         print 'FileCache.__getfile:downloading',server,':',cookie,'->',cache_file
 
         hash = hashlib.md5()
-        data = file(cache_file,"w")
+        data = pi_resource.file_file(cache_file,"w")
         fetched = 0
 
         while True:
@@ -255,7 +255,7 @@ def copy_file(ideal,filename):
     print 'downloading',ideal,'to',filename
 
     hash = hashlib.md5()
-    data = file(filename,"w")
+    data = pi_resource.file_file(filename,"w")
     fetched = 0
 
     while True:
@@ -272,13 +272,13 @@ def copy_file(ideal,filename):
         yield result
 
         if not result.status():
-            os.unlink(filename)
+            pi_resource.os_unlink(filename)
             yield async.Coroutine.failure('file transfer error: %s' % result.args()[0])
             return
 
         rsp = result.args()[0]
         if len(rsp) < remaining:
-            os.unlink(filename)
+            pi_resource.os_unlink(filename)
             yield async.Coroutine.failure('file transfer error: short read')
             return
 
@@ -292,5 +292,5 @@ def copy_file(ideal,filename):
     if hash.hexdigest() == md5:
         yield async.Coroutine.success(filename)
 
-    os.unlink(filename)
+    pi_resource.os_unlink(filename)
     yield async.Coroutine.failure('file transfer error: checksum error')

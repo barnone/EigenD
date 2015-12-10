@@ -27,6 +27,7 @@
 #include <piw/piw_table.h>
 #include <piw/piw_clock.h>
 #include <piw/piw_status.h>
+#include <piw/piw_keys.h>
 
 #include <picross/pic_time.h>
 #include <picross/pic_log.h>
@@ -75,7 +76,7 @@ namespace
 
     struct kwire_t: piw::wire_ctl_t, piw::event_data_source_real_t
     {
-        kwire_t(unsigned i,unsigned r,unsigned c,const piw::data_t &path,keyboard_t *k);
+        kwire_t(unsigned i,unsigned c,unsigned r,const piw::data_t &path,keyboard_t *k);
         ~kwire_t() { source_shutdown(); keyboard = 0; }
 
         void activate(unsigned long long);
@@ -89,7 +90,7 @@ namespace
         unsigned counter;
         float maxpressure;
         keyboard_t *keyboard;
-        unsigned index_,row_,column_;
+        unsigned index_,column_,row_;
 
         bool active;
         unsigned long long last;
@@ -261,8 +262,10 @@ namespace
         }
     }
     
-    static const unsigned int MICRO_COURSECOUNT = 5;
-    static const unsigned int MICRO_COURSES[MICRO_COURSECOUNT] = {4,4,4,4,1};
+    static const unsigned int MICRO_COLUMNCOUNT = 5;
+    static const unsigned int MICRO_ROWS[MICRO_COLUMNCOUNT] = {4,4,4,4,1};
+
+    static const unsigned int MICRO_COURSEKEYS = 17;
 
     struct keyboard_t: piw::root_ctl_t, piw::wire_ctl_t, piw::thing_t, micro::active_t::delegate_t
     {
@@ -330,68 +333,129 @@ namespace
 
         void create_kwires()
         {
-            unsigned previous_coursekeys = 0;
+            unsigned previous_rowkeys = 0;
+            unsigned column = 1;
             unsigned row = 1;
-            unsigned col = 1;
 
-            unsigned coursecount = get_coursecount();
-            for(unsigned k=1; k <= KEYS && row <= coursecount; k++)
+            unsigned columncount = get_columncount();
+            for(unsigned k=1; k <= KEYS && column <= columncount; k++)
             {
-                unsigned coursekeys = get_courses_array()[row-1];
-                if((k-previous_coursekeys) <= coursekeys)
+                unsigned rowkeys = get_columnlen_array()[column-1];
+                if((k-previous_rowkeys) <= rowkeys)
                 {
-                    col = k-previous_coursekeys; 
+                    row = k-previous_rowkeys; 
                 }
                 else
                 {
-                    row++;
-                    previous_coursekeys += coursekeys;
-                    col = k-previous_coursekeys; 
+                    column++;
+                    previous_rowkeys += rowkeys;
+                    row = k-previous_rowkeys; 
                 }
-                kwires_[k-1] = std::auto_ptr<kwire_t>(new kwire_t(k,row,col,piw::pathtwo(1,k,0),this));
+                kwires_[k-1] = std::auto_ptr<kwire_t>(new kwire_t(k,column,row,piw::pathtwo(1,k,0),this));
             }
         }
 
-        const piw::data_nb_t get_courses_tuple()
+        const unsigned int get_columncount()
         {
-            if(!courses_.is_empty())
+            return MICRO_COLUMNCOUNT;
+        }
+
+        const unsigned int* get_columnlen_array()
+        {
+            return MICRO_ROWS;
+        }
+
+        const piw::data_t get_columnlen_tuple()
+        {
+            if(!columnlen_.is_null())
             {
-                return courses_.get();
+                return columnlen_;
             }
 
-            piw::data_nb_t courses = piw::tuplenull_nb(0);
-            for(unsigned i = 0; i < get_coursecount(); ++i)
+            piw::data_t rows = piw::tuplenull(0);
+            for(unsigned i = 0; i < get_columncount(); ++i)
             {
-                courses = piw::tupleadd_nb(courses, piw::makelong_nb(get_courses_array()[i],0));
+                rows = piw::tupleadd(rows, piw::makelong(get_columnlen_array()[i],0));
             }
 
-            courses_.set_nb(courses);
+            columnlen_ = rows;
 
-            return courses_.get();
+            return columnlen_;
+        }
+
+        const piw::data_t get_columnoffset_tuple()
+        {
+            if(!columnoffset_.is_null())
+            {
+                return columnoffset_;
+            }
+
+            piw::data_t rows = piw::tuplenull(0);
+            for(unsigned i = 0; i < get_columncount(); ++i)
+            {
+                rows = piw::tupleadd(rows, piw::makelong(0,0));
+            }
+
+            columnoffset_ = rows;
+
+            return columnoffset_;
         }
 
         const unsigned int get_coursecount()
         {
-            return MICRO_COURSECOUNT;
+            return 1;
         }
 
-        const unsigned int* get_courses_array()
+        const unsigned int get_courselen()
         {
-            return MICRO_COURSES;
+            return MICRO_COURSEKEYS;
+        }
+
+        const piw::data_t get_courselen_tuple()
+        {
+            if(!courselen_.is_null())
+            {
+                return courselen_;
+            }
+
+            piw::data_t courses = piw::tuplenull(0);
+            courses = piw::tupleadd(courses, piw::makelong(get_courselen(),0));
+
+            courselen_ = courses;
+
+            return courselen_;
+        }
+
+        const piw::data_t get_courseoffset_tuple()
+        {
+            if(!courseoffset_.is_null())
+            {
+                return courseoffset_;
+            }
+
+            piw::data_t courses = piw::tuplenull(0);
+            courses = piw::tupleadd(courses, piw::makefloat(0.0,0));
+
+            courseoffset_ = courses;
+
+            return courseoffset_;
         }
 
         std::auto_ptr<kwire_t> kwires_[KEYS];
         std::auto_ptr<cwire_t> cwire_;
         pic::notify_t dead;
         float threshold1,threshold2;
-        piw::dataholder_nb_t courses_;
+        piw::data_t columnlen_;
+        piw::data_t columnoffset_;
+        piw::data_t courselen_;
+        piw::data_t courseoffset_;
 
         pic_atomic_t queue;
         unsigned drops;
         unsigned counter;
     };
 
-    kwire_t::kwire_t(unsigned i, unsigned r, unsigned c, const piw::data_t &path, keyboard_t *k): piw::event_data_source_real_t(path), counter(0), maxpressure(0), keyboard(k), index_(i), row_(r), column_(c), active(false), last(0), gated(false),id_(piw::pathone_nb(i,0)),output_(15,PIW_DATAQUEUE_SIZE_NORM)
+    kwire_t::kwire_t(unsigned i, unsigned c, unsigned r, const piw::data_t &path, keyboard_t *k): piw::event_data_source_real_t(path), counter(0), maxpressure(0), keyboard(k), index_(i), column_(c), row_(r), active(false), last(0), gated(false),id_(piw::pathone_nb(i,0)),output_(15,PIW_DATAQUEUE_SIZE_NORM)
     {
         keyboard->connect_wire(this,source());
     }
@@ -435,20 +499,10 @@ namespace
         if(counter==0)
         {
             output_ = piw::xevent_data_buffer_t(15,PIW_DATAQUEUE_SIZE_NORM);
-            output_.add_value(1,piw::makefloat_bounded_nb(3,0,0,0,0));
             output_.add_value(2,piw::makefloat_bounded_nb(1,0,0,0,0));
             output_.add_value(3,piw::makefloat_bounded_nb(1,-1,0,0,0));
             output_.add_value(4,piw::makefloat_bounded_nb(1,-1,0,0,0));
-
-            piw::data_nb_t position = piw::tuplenull_nb(t);
-            position = piw::tupleadd_nb(position, piw::makefloat_nb(row_,t));
-            position = piw::tupleadd_nb(position, piw::makefloat_nb(column_,t));
-            piw::data_nb_t key = piw::tuplenull_nb(t);
-            key = piw::tupleadd_nb(key, piw::makelong_nb(index_,t));
-            key = piw::tupleadd_nb(key, position);
-            key = piw::tupleadd_nb(key, piw::makelong_nb(index_,t));
-            key = piw::tupleadd_nb(key, position);
-            output_.add_value(5, key);
+            output_.add_value(5,piw::makekey(column_,row_,1,index_,piw::KEY_LIGHT,t));
 
             source_start(0,id_.restamp(t), output_);
 
@@ -472,7 +526,7 @@ namespace
 
             if(maxpressure > keyboard->threshold2)
             {
-                output_.add_value(1,piw::makefloat_bounded_nb(3.0,0.0,0.0,3.0,t));
+                output_.add_value(5,piw::makekey(row_,column_,1,index_,piw::KEY_HARD,t));
 
                 gated = true;
             }
@@ -480,9 +534,9 @@ namespace
 
         if(!gated && maxpressure > keyboard->threshold1)
         {
-            output_.add_value(1,piw::makefloat_bounded_nb(3.0,0.0,0.0,2.0,t));
+            output_.add_value(5,piw::makekey(row_,column_,1,index_,piw::KEY_SOFT,t));
 
-            gated=true;
+            gated = true;
         }
     }
 
@@ -498,7 +552,7 @@ namespace
 
 struct ukbd::bundle_t::impl_t : virtual pic::tracked_t, piw::thing_t, piw::clockdomain_ctl_t, piw::clocksink_t
 {
-    impl_t(const char *n, const piw::cookie_t &c, const pic::notify_t &d, const piw::change_t &a): loop_(n,&keyboard_), keyboard_(c,d,a), leds_(MICRO_COURSECOUNT,MICRO_COURSES)
+    impl_t(const char *n, const piw::cookie_t &c, const pic::notify_t &d, const piw::change_t &a): loop_(n,&keyboard_), keyboard_(c,d,a), leds_(MICRO_COLUMNCOUNT,MICRO_ROWS)
     {
         set_source(piw::makestring("*",0));
 
@@ -538,9 +592,24 @@ struct ukbd::bundle_t::impl_t : virtual pic::tracked_t, piw::thing_t, piw::clock
         __lightdeq(this,(void *)(d.give()),0,0);
     }
 
-    piw::data_t get_courses()
+    piw::data_t get_columnlen()
     {
-        return keyboard_.get_courses_tuple().make_normal();
+        return keyboard_.get_columnlen_tuple();
+    }
+
+    piw::data_t get_columnoffset()
+    {
+        return keyboard_.get_columnoffset_tuple();
+    }
+
+    piw::data_t get_courselen()
+    {
+        return keyboard_.get_courselen_tuple();
+    }
+
+    piw::data_t get_courseoffset()
+    {
+        return keyboard_.get_courseoffset_tuple();
     }
 
     static void __set_led(void *self, unsigned key, unsigned color)
@@ -618,10 +687,28 @@ std::string ukbd::bundle_t::name()
     return _root->loop_.get_name();
 }
 
-piw::data_t ukbd::bundle_t::get_courses()
+piw::data_t ukbd::bundle_t::get_columnlen()
 {
     PIC_ASSERT(_root);
-    return _root->get_courses();
+    return _root->get_columnlen();
+}
+
+piw::data_t ukbd::bundle_t::get_columnoffset()
+{
+    PIC_ASSERT(_root);
+    return _root->get_columnoffset();
+}
+
+piw::data_t ukbd::bundle_t::get_courselen()
+{
+    PIC_ASSERT(_root);
+    return _root->get_courselen();
+}
+
+piw::data_t ukbd::bundle_t::get_courseoffset()
+{
+    PIC_ASSERT(_root);
+    return _root->get_courseoffset();
 }
 
 piw::change_nb_t ukbd::bundle_t::led_functor()

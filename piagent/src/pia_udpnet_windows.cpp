@@ -25,9 +25,12 @@
 #include <picross/pic_thread.h>
 #include <picross/pic_stl.h>
 #include <piagent/pia_udpnet.h>
+#include <picross/pic_resources.h>
 
 #include <string.h>
+#include <direct.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 #include <map>
 
@@ -52,9 +55,9 @@ typedef _W64 int ssize_t;
 
 #include <errno.h>
 
-#define PORTBASE_LOCAL 55555
-#define PORTBASE_ETHER 56555
-#define PORTBASE(loop) ((loop)?PORTBASE_LOCAL:PORTBASE_ETHER)
+#define PORTBASE_LOCAL  55555
+#define PORTBASE_OFFSET 1000
+#define PORTBASE(p,loop) (p+((loop)?0:PORTBASE_OFFSET))
 
 namespace
 {
@@ -97,6 +100,57 @@ namespace
 
         int fd;
     };
+
+    static unsigned get_portbase__()
+    {
+        int status;
+        std::string libdir = pic::global_library_dir();
+        status = pic::mkdir(libdir);
+        if(status != 0 && errno != EEXIST)
+        {
+            return PORTBASE_LOCAL;
+        }
+
+        std::string pd = libdir+"\\Global";
+        std::string pf = pd+"\\ports.txt";
+        FILE *fp = pic::fopen(pf,"r");
+
+        if(!fp)
+        {
+            status = pic::mkdir(pd);
+            if(!status || errno == EEXIST)
+            {
+                FILE *fp = pic::fopen(pf,"w");
+                fprintf(fp,"%u\n",PORTBASE_LOCAL);
+                fclose(fp);
+            }
+            return PORTBASE_LOCAL;
+        }
+
+
+        unsigned p;
+
+        if(fscanf(fp,"%u",&p)==1)
+        {
+            fclose(fp);
+            return p;
+        }
+
+        fclose(fp);
+        return PORTBASE_LOCAL;
+    }
+
+    static int portbase__ = 0;
+
+    static unsigned get_portbase()
+    {
+        if(portbase__ < 1024)
+        {
+            portbase__ = get_portbase__();
+            pic::logmsg() << "using portbase " << portbase__;
+        }
+        return portbase__;
+    }
 
     struct send_socket_t
     {
@@ -157,7 +211,7 @@ namespace
              memset(&group,0,sizeof(group));
              group.sin_family = AF_INET;
              group.sin_addr.s_addr = addr;
-             group.sin_port = htons(PORTBASE(loop_)+spc_);
+             group.sin_port = htons(PORTBASE(get_portbase(),loop_)+spc_);
 			 
 			 //char* inet_addr = inet_ntoa( group.sin_addr ); 
 			 // pic::logmsg() << "\n data sending to: " << inet_addr << " port:" << (unsigned) PORTBASE(loop_)+spc_ ;
@@ -211,7 +265,7 @@ namespace
 						
             memset((char *) &addr, 0, sizeof(addr));
             addr.sin_family = AF_INET;
-            addr.sin_port = htons(PORTBASE(loop)+spc_);
+            addr.sin_port = htons(PORTBASE(get_portbase(),loop)+spc_);
             addr.sin_addr.s_addr = local_ ;
 			
 			//pic::logmsg() << "recev socket bind port: " << (unsigned) PORTBASE(loop)+spc_ ;
@@ -637,7 +691,7 @@ namespace
         {
             if(getenv("PI_FULLNET")==0)
             {
-                pic::logmsg() << "warning: networking disabled";
+                //pic::logmsg() << "warning: networking disabled";
                 local_ = true;
             }
         }
@@ -804,7 +858,6 @@ struct pia::udpnet_t::impl_t: netbase_t
 
     ~impl_t()
     {
-		pic::logmsg() << "deleting udpnet object and calling network shutdown"; 
 		shutdown();
     }
 
@@ -837,7 +890,6 @@ struct pia::udpnet_t::impl_t: netbase_t
 
 pia::udpnet_t::udpnet_t(pic::nballocator_t *a, bool clock)
 {
-	pic::logmsg() << "constructing udp network";
 	pia_logguard_t guard(0,a);
 	impl_=new impl_t(a,clock);
 }

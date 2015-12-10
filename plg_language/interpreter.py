@@ -20,7 +20,7 @@
 
 from pi import async,logic,rpc
 from pi.logic.shortcuts import *
-from plg_language import context,referent
+from . import context,referent
 
 import copy
 import traceback
@@ -31,6 +31,8 @@ class Delegate:
         pass
     def error_message(self,err):
         print 'error_message',err
+    def user_message(self,err):
+        print 'user_message',err
 
 def rpcerrorhandler(ei):
     traceback.print_exception(*ei)
@@ -128,7 +130,7 @@ class Interpreter:
 
         self.__jobs.add(result)
 
-        def completed(status):
+        def completed(status,*args,**kwds):
             print 'background job',status
             self.__jobs.discard(result)
 
@@ -146,8 +148,8 @@ class Interpreter:
             else:
                 for w in waiters: w.failed('background job failed')
 
-        result.setCallback(lambda: completed(True))
-        result.setErrback(lambda msg: completed(False))
+        result.setCallback(lambda *args,**kwds: completed(True,*args,**kwds))
+        result.setErrback(lambda  *args,**kwds: completed(False,*args,**kwds))
 
     def set_result(self,r):
         self.__result = r
@@ -176,13 +178,9 @@ class Interpreter:
     def sync(self, *args):
         return self.__database.sync(*args)
 
-    def classify(self,word):
-        classification = self.__database.classify(word)
-        if classification: return classification
-        return ('noun',word)
-
     def interpret(self,word):
-        (klass,word) = self.classify(word)
+        klass,word = self.__database.classify(word)
+        print 'interpreting',word,klass
         return self.__interpret0(klass,word)
 
     def undo(self):
@@ -267,6 +265,9 @@ class Interpreter:
                 if 'user_errors' in ar.kwds():
                     for err in ar.kwds()['user_errors']:
                         self.__delegate.error_message(err)
+                if 'user_messages' in ar.kwds():
+                    for err in ar.kwds()['user_messages']:
+                        self.__delegate.user_message(err)
                
                 if klass != 'ahem' and klass != 'hey':
                     self.__context.clear_inner_scope()
@@ -280,6 +281,9 @@ class Interpreter:
                 if 'user_errors' in ar.kwds():
                     for err in ar.kwds()['user_errors']:
                         self.__delegate.error_message(err)
+                if 'user_messages' in ar.kwds():
+                    for err in ar.kwds()['user_messages']:
+                        self.__delegate.user_message(err)
 
                 self.__context.clear_inner_scope()
             yield async.Coroutine.failure(*ar.args(),**ar.kwds())

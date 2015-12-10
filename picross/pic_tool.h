@@ -37,6 +37,22 @@ namespace pic
             void start();
             bool isrunning();
             void quit();
+            bool isavailable();
+        private:
+            impl_t *impl_;
+    };
+
+    class PIC_DECLSPEC_CLASS bgprocess_t
+    {
+        public:
+            class impl_t;
+        public:
+            bgprocess_t(const char *dir,const char *name,bool keeprunning = false);
+            bgprocess_t(const std::string &dir,const char *name,bool keeprunning = false);
+            ~bgprocess_t();
+            void start();
+            bool isrunning();
+            void quit();
         private:
             impl_t *impl_;
     };

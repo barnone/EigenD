@@ -30,6 +30,7 @@
 #include <piw/piw_clock.h>
 #include <piw/piw_status.h>
 #include <piw/piw_resampler.h>
+#include <piw/piw_keys.h>
 
 #include <picross/pic_time.h>
 #include <picross/pic_log.h>
@@ -129,9 +130,14 @@ namespace
         void set_mic_quality(unsigned q);
         void mic_reset();
 
-        virtual const unsigned int get_coursecount() = 0;
-        virtual const unsigned int* get_courses_array() = 0;
-        const piw::data_nb_t get_courses_tuple();
+        virtual const unsigned int get_columncount() = 0;
+        virtual const unsigned int* get_columnlen_array() = 0;
+        const piw::data_t get_columnlen_tuple();
+        const piw::data_t get_columnoffset_tuple();
+
+        virtual const unsigned int get_courselen() = 0;
+        const piw::data_t get_courselen_tuple();
+        const piw::data_t get_courseoffset_tuple();
 
         void create_kwires();
 
@@ -159,7 +165,10 @@ namespace
         void (*midi_sink_)(void *,const unsigned char *,unsigned);
         void *midi_sink_ctx_;
         piw::resampler_t resampler_;
-        piw::dataholder_nb_t courses_;
+        piw::data_t columnlen_;
+        piw::data_t columnoffset_;
+        piw::data_t courselen_;
+        piw::data_t courseoffset_;
     };
 
     struct blob_t
@@ -307,15 +316,12 @@ namespace
 
         void update(const blob_t *b);
 
-        unsigned index_,row_,column_;
+        unsigned index_,column_,row_;
         piw::data_nb_t id_;
         keyboard_t *keyboard_;
         float maxpressure_;
         unsigned counter_;
-        unsigned gated_;
-        unsigned gated_count_;
         bool running_;
-        bool skipping_;
         unsigned long long ts_;
         piw::xevent_data_buffer_t output_;
         float cur_pressure_, cur_roll_, cur_yaw_;
@@ -404,11 +410,13 @@ namespace
                 return;
             }
 
-            if(abs(((long)p)-first_)>10)
+            if(abs(((long)p)-first_)<=10)
             {
-                pic::logmsg() << "pedal diff " << p << " from " << first_;
-                init_=true;
+                return;
             }
+
+            pic::logmsg() << "pedal diff " << p << " from " << first_;
+            init_=true;
         }
 
         if(abs((long)p-(long)last_)<2)
@@ -589,22 +597,70 @@ namespace
         resampler_.reset();
     }
 
-    const piw::data_nb_t keyboard_t::get_courses_tuple()
+    const piw::data_t keyboard_t::get_columnlen_tuple()
     {
-        if(!courses_.is_empty())
+        if(!columnlen_.is_null())
         {
-            return courses_.get();
+            return columnlen_;
         }
 
-        piw::data_nb_t courses = piw::tuplenull_nb(0);
-        for(unsigned i = 0; i < get_coursecount(); ++i)
+        piw::data_t columns = piw::tuplenull(0);
+        for(unsigned i = 0; i < get_columncount(); ++i)
         {
-            courses = piw::tupleadd_nb(courses, piw::makelong_nb(get_courses_array()[i],0));
+            columns = piw::tupleadd(columns, piw::makelong(get_columnlen_array()[i],0));
         }
 
-        courses_.set_nb(courses);
+        columnlen_ = columns;
 
-        return courses_.get();
+        return columnlen_;
+    }
+
+    const piw::data_t keyboard_t::get_columnoffset_tuple()
+    {
+        if(!columnoffset_.is_null())
+        {
+            return columnoffset_;
+        }
+
+        piw::data_t columns = piw::tuplenull(0);
+        for(unsigned i = 0; i < get_columncount(); ++i)
+        {
+            columns = piw::tupleadd(columns, piw::makelong(0,0));
+        }
+
+        columnoffset_ = columns;
+
+        return columnoffset_;
+    }
+
+    const piw::data_t keyboard_t::get_courselen_tuple()
+    {
+        if(!courselen_.is_null())
+        {
+            return courselen_;
+        }
+
+        piw::data_t courses = piw::tuplenull(0);
+        courses = piw::tupleadd(courses, piw::makelong(get_courselen(),0));
+
+        courselen_ = courses;
+
+        return courselen_;
+    }
+
+    const piw::data_t keyboard_t::get_courseoffset_tuple()
+    {
+        if(!courseoffset_.is_null())
+        {
+            return courseoffset_;
+        }
+
+        piw::data_t courses = piw::tuplenull(0);
+        courses = piw::tupleadd(courses, piw::makefloat(0.0,0));
+
+        courseoffset_ = courses;
+
+        return courseoffset_;
     }
 
     piw::data_nb_t keyboard_t::mic_data(unsigned long long t, unsigned bs)
@@ -753,30 +809,32 @@ namespace
 
     void keyboard_t::create_kwires()
     {
-        unsigned previous_coursekeys = 0;
-        unsigned row = 1;
+        unsigned previous_colkeys = 0;
         unsigned col = 1;
+        unsigned row = 1;
         
-        unsigned coursecount = get_coursecount();
-        for(unsigned k=1; k <= kbd_num_keys() && row <= coursecount; k++)
+        unsigned columncount = get_columncount();
+        for(unsigned k=1; k <= kbd_num_keys() && col <= columncount; k++)
         {
-            unsigned coursekeys = get_courses_array()[row-1];
-            if((k-previous_coursekeys) <= coursekeys)
+            unsigned colkeys = get_columnlen_array()[col-1];
+            if((k-previous_colkeys) <= colkeys)
             {
-                col = k-previous_coursekeys; 
+                row = k-previous_colkeys; 
             }
             else
             {
-                row++;
-                previous_coursekeys += coursekeys;
-                col = k-previous_coursekeys; 
+                col++;
+                previous_colkeys += colkeys;
+                row = k-previous_colkeys; 
             }
-            kwires_[k-1] = std::auto_ptr<kwire_t>(new kwire_t(k,row,col,piw::pathtwo(1,k,0),this));
+            kwires_[k-1] = std::auto_ptr<kwire_t>(new kwire_t(k,col,row,piw::pathtwo(1,k,0),this));
         }
     }
 
-    static const unsigned int ALPHA_COURSECOUNT = 6;
-    static const unsigned int ALPHA_COURSES[ALPHA_COURSECOUNT] = {24,24,24,24,24,12};
+    static const unsigned int ALPHA_COLUMNCOUNT = 6;
+    static const unsigned int ALPHA_COLUMNS[ALPHA_COLUMNCOUNT] = {24,24,24,24,24,12};
+
+    static const unsigned int ALPHA_COURSEKEYS = 132;
 
     struct alpha_kbd: keyboard_t
     {
@@ -825,14 +883,24 @@ namespace
             }
         }
 
-        virtual const unsigned int get_coursecount()
+        virtual const unsigned int get_columncount()
         {
-            return ALPHA_COURSECOUNT;
+            return ALPHA_COLUMNCOUNT;
         }
 
-        virtual const unsigned int* get_courses_array()
+        virtual const unsigned int* get_columnlen_array()
         {
-            return ALPHA_COURSES;
+            return ALPHA_COLUMNS;
+        }
+
+        virtual const unsigned int get_coursecount()
+        {
+            return 1;
+        }
+
+        virtual const unsigned int get_courselen()
+        {
+            return ALPHA_COURSEKEYS;
         }
 
         std::auto_ptr<strip_t> strip1_;
@@ -840,8 +908,10 @@ namespace
         std::auto_ptr<breath_t> breath_;
     };
     
-    static const unsigned int TAU_COURSECOUNT = 7;
-    static const unsigned int TAU_COURSES[TAU_COURSECOUNT] = {16,16,20,20,12,4,4};
+    static const unsigned int TAU_COLUMNCOUNT = 7;
+    static const unsigned int TAU_COLUMNS[TAU_COLUMNCOUNT] = {16,16,20,20,12,4,4};
+        
+    static const unsigned int TAU_COURSEKEYS = 92;
         
     struct tau_kbd: keyboard_t
     {
@@ -893,21 +963,31 @@ namespace
                 msg << (alpha2::active_t::keydown(TAU_KBD_KEYS+5+m,map)?"X":"-");
         }
 
-        virtual const unsigned int get_coursecount()
+        virtual const unsigned int get_columncount()
         {
-            return TAU_COURSECOUNT;
+            return TAU_COLUMNCOUNT;
         }
 
-        virtual const unsigned int* get_courses_array()
+        virtual const unsigned int* get_columnlen_array()
         {
-            return TAU_COURSES;
+            return TAU_COLUMNS;
+        }
+
+        virtual const unsigned int get_coursecount()
+        {
+            return 1;
+        }
+
+        virtual const unsigned int get_courselen()
+        {
+            return TAU_COURSEKEYS;
         }
 
         std::auto_ptr<strip_t> strip1_;
         std::auto_ptr<breath_t> breath1_;
     };
 
-    kwire_t::kwire_t(unsigned i, unsigned r, unsigned c, const piw::data_t &path, keyboard_t *k): piw::event_data_source_real_t(path), index_(i), row_(r), column_(c), id_(piw::pathone_nb(i,0)), keyboard_(k), maxpressure_(0), counter_(0), gated_(0),gated_count_(0), running_(false), ts_(0), output_(63,PIW_DATAQUEUE_SIZE_NORM),cur_pressure_(0), cur_roll_(0), cur_yaw_(0)
+    kwire_t::kwire_t(unsigned i, unsigned c, unsigned r, const piw::data_t &path, keyboard_t *k): piw::event_data_source_real_t(path), index_(i), column_(c), row_(r), id_(piw::pathone_nb(i,0)), keyboard_(k), maxpressure_(0), counter_(0), running_(false), ts_(0), output_(63,PIW_DATAQUEUE_SIZE_NORM),cur_pressure_(0), cur_roll_(0), cur_yaw_(0)
     {
         k->connect_wire(this,source());
     }
@@ -946,11 +1026,6 @@ namespace
             if(running_)
             {
                 source_end(t);
-                output_ = piw::xevent_data_buffer_t(31,PIW_DATAQUEUE_SIZE_NORM);
-                output_.add_value(1,piw::makefloat_bounded_nb(3,0,0,0,t));
-                output_.add_value(2,piw::makefloat_bounded_nb(1,0,0,0,t));
-                output_.add_value(3,piw::makefloat_bounded_nb(1,-1,0,0,t));
-                output_.add_value(4,piw::makefloat_bounded_nb(1,-1,0,0,t));
                 running_=false;
             }
 
@@ -967,66 +1042,56 @@ namespace
             if(ts_ && ts<ts_+DEBOUNCE_US)
             {
                 pic::logmsg() << "debounce " << index_ << ' ' << ts-ts_ << " us";
-                skipping_=true;
+                running_ = false;
                 return;
             }
 
-            skipping_=false;
-
+            output_.add_value(5,piw::makekey(column_,row_,1,index_,piw::KEY_LIGHT,t));
+            output_.add_value(2,piw::makefloat_bounded_nb(1,0,0,p/4096.0,t));
+            output_.add_value(3,piw::makefloat_bounded_nb(1,-1,0,__clip(r/1024.0,keyboard_->roll_axis_window_),t));
+            output_.add_value(4,piw::makefloat_bounded_nb(1,-1,0,__clip(y/1024.0,keyboard_->yaw_axis_window_),t));
             source_start(0,id_.restamp(t),output_);
-            piw::data_nb_t position = piw::tuplenull_nb(t);
-            position = piw::tupleadd_nb(position, piw::makefloat_nb(row_,t));
-            position = piw::tupleadd_nb(position, piw::makefloat_nb(column_,t));
-            piw::data_nb_t key = piw::tuplenull_nb(t);
-            key = piw::tupleadd_nb(key, piw::makelong_nb(index_,t));
-            key = piw::tupleadd_nb(key, position);
-            key = piw::tupleadd_nb(key, piw::makelong_nb(index_,t));
-            key = piw::tupleadd_nb(key, position);
-            output_.add_value(5, key);
             running_=true;
             maxpressure_=0;
-            gated_=0;
-            gated_count_=0;
+            cur_pressure_=p; cur_roll_=r; cur_yaw_=y;
             return;
         }
 
-        if(skipping_)
+        if(!running_)
         {
             return;
         }
 
-        if(gated_>0 && gated_count_>0) { --gated_count_; output_.add_value(1,piw::makefloat_bounded_nb(3,0,0,gated_,t)); }
         if(p!=cur_pressure_) output_.add_value(2,piw::makefloat_bounded_nb(1,0,0,p/4096.0,t));
         if(r!=cur_roll_) output_.add_value(3,piw::makefloat_bounded_nb(1,-1,0,__clip(r/1024.0,keyboard_->roll_axis_window_),t));
         if(y!=cur_yaw_) output_.add_value(4,piw::makefloat_bounded_nb(1,-1,0,__clip(y/1024.0,keyboard_->yaw_axis_window_),t));
-        cur_pressure_=p; cur_roll_=r; cur_yaw_=y;
 
-        maxpressure_=std::max(maxpressure_,(float)p);
+        cur_pressure_=p; cur_roll_=r; cur_yaw_=y;
 
         if(counter_<ESTIMATION_END)
         {
             counter_++;
+            maxpressure_=std::max(maxpressure_,(float)p);
             return;
         }
 
         if(counter_==ESTIMATION_END)
         {
+            counter_++;
+            maxpressure_=std::max(maxpressure_,(float)p);
+
             if(maxpressure_ > keyboard_->threshold2_)
             {
-                gated_=3;
-                gated_count_=20;
-                output_.add_value(1,piw::makefloat_bounded_nb(3,0,0,3,t));
+                output_.add_value(5,piw::makekey(column_,row_,1,index_,piw::KEY_HARD,t));
+                return;
+            }
+
+            if(maxpressure_ > keyboard_->threshold1_)
+            {
+                output_.add_value(5,piw::makekey(column_,row_,1,index_,piw::KEY_SOFT,t));
+                return;
             }
         }
-
-        if(!gated_ && maxpressure_ > keyboard_->threshold1_)
-        {
-            output_.add_value(1,piw::makefloat_bounded_nb(3,0,0,2,t));
-            gated_=2;
-            gated_count_=20;
-        }
-
-        counter_++;
     }
 
     struct mic_output_t: piw::root_ctl_t, piw::wire_ctl_t, piw::event_data_source_real_t, piw::clockdomain_ctl_t, piw::clocksink_t, piw::thing_t
@@ -1506,17 +1571,17 @@ namespace
 
 struct kbd::kbd_impl_t: piw::clockdomain_ctl_t, piw::clocksink_t, piw::thing_t, pic::safe_worker_t, virtual pic::tracked_t, virtual public pic::lckobject_t
 {
-    kbd_impl_t(pic::usbdevice_t *device, const piw::cookie_t &ac, keyboard_t *pkeyboard): pic::safe_worker_t(10,PIC_THREAD_PRIORITY_NORMAL), device_(device), loop_(device,pkeyboard,false), pkeyboard_(pkeyboard), skipped_(false), mic_output_(new mic_output_t(ac, pkeyboard_,&loop_)), headphone_input_(new headphone_input_t(&loop_)), leds_(pkeyboard->get_coursecount(),pkeyboard->get_courses_array())
+    kbd_impl_t(pic::usbdevice_t *device, const piw::cookie_t &ac, keyboard_t *pkeyboard): pic::safe_worker_t(10,PIC_THREAD_PRIORITY_NORMAL), device_(device), loop_(device,pkeyboard,false), pkeyboard_(pkeyboard), skipped_(false), mic_output_(new mic_output_t(ac, pkeyboard_,&loop_)), headphone_input_(new headphone_input_t(&loop_)), leds_(pkeyboard->get_columncount(),pkeyboard->get_columnlen_array())
     {
         init();
     }
 
-    kbd_impl_t(pic::usbdevice_t *device, keyboard_t *pkeyboard): pic::safe_worker_t(10,PIC_THREAD_PRIORITY_NORMAL), device_(device), loop_(device,pkeyboard,false), pkeyboard_(pkeyboard), skipped_(false), headphone_input_(new headphone_input_t(&loop_)), leds_(pkeyboard->get_coursecount(),pkeyboard->get_courses_array())
+    kbd_impl_t(pic::usbdevice_t *device, keyboard_t *pkeyboard): pic::safe_worker_t(10,PIC_THREAD_PRIORITY_NORMAL), device_(device), loop_(device,pkeyboard,false), pkeyboard_(pkeyboard), skipped_(false), headphone_input_(new headphone_input_t(&loop_)), leds_(pkeyboard->get_columncount(),pkeyboard->get_columnlen_array())
     {
         init();
     }
 
-    kbd_impl_t(const char *name, keyboard_t *pkeyboard): pic::safe_worker_t(10,PIC_THREAD_PRIORITY_NORMAL), device_(new pic::usbdevice_t(name,0)), loop_(device_,pkeyboard,true), pkeyboard_(pkeyboard), skipped_(false), leds_(pkeyboard->get_coursecount(),pkeyboard->get_courses_array())
+    kbd_impl_t(const char *name, keyboard_t *pkeyboard): pic::safe_worker_t(10,PIC_THREAD_PRIORITY_NORMAL), device_(new pic::usbdevice_t(name,0)), loop_(device_,pkeyboard,true), pkeyboard_(pkeyboard), skipped_(false), leds_(pkeyboard->get_columncount(),pkeyboard->get_columnlen_array())
     {
         init();
     }
@@ -1552,9 +1617,24 @@ struct kbd::kbd_impl_t: piw::clockdomain_ctl_t, piw::clocksink_t, piw::thing_t, 
         }
     }
 
-    piw::data_t get_courses()
+    piw::data_t get_columnlen()
     {
-        return pkeyboard_->get_courses_tuple().make_normal();
+        return pkeyboard_->get_columnlen_tuple();
+    }
+
+    piw::data_t get_columnoffset()
+    {
+        return pkeyboard_->get_columnoffset_tuple();
+    }
+
+    piw::data_t get_courselen()
+    {
+        return pkeyboard_->get_courselen_tuple();
+    }
+
+    piw::data_t get_courseoffset()
+    {
+        return pkeyboard_->get_courseoffset_tuple();
     }
 
     piw::cookie_t audio_cookie()
@@ -1678,10 +1758,28 @@ std::string kbd::alpha2_bundle_legacy_t::name()
     return _root->loop_.get_name();
 }
 
-piw::data_t kbd::alpha2_bundle_legacy_t::get_courses()
+piw::data_t kbd::alpha2_bundle_legacy_t::get_columnlen()
 {
     PIC_ASSERT(_root);
-    return _root->get_courses();
+    return _root->get_columnlen();
+}
+
+piw::data_t kbd::alpha2_bundle_legacy_t::get_columnoffset()
+{
+    PIC_ASSERT(_root);
+    return _root->get_columnoffset();
+}
+
+piw::data_t kbd::alpha2_bundle_legacy_t::get_courselen()
+{
+    PIC_ASSERT(_root);
+    return _root->get_courselen();
+}
+
+piw::data_t kbd::alpha2_bundle_legacy_t::get_courseoffset()
+{
+    PIC_ASSERT(_root);
+    return _root->get_courseoffset();
 }
 
 void kbd::alpha2_bundle_legacy_t::set_roll_axis_window(float t)
@@ -1857,10 +1955,28 @@ std::string kbd::alpha2_bundle_t::name()
     return _root->loop_.get_name();
 }
 
-piw::data_t kbd::alpha2_bundle_t::get_courses()
+piw::data_t kbd::alpha2_bundle_t::get_columnlen()
 {
     PIC_ASSERT(_root);
-    return _root->get_courses();
+    return _root->get_columnlen();
+}
+
+piw::data_t kbd::alpha2_bundle_t::get_columnoffset()
+{
+    PIC_ASSERT(_root);
+    return _root->get_columnoffset();
+}
+
+piw::data_t kbd::alpha2_bundle_t::get_courselen()
+{
+    PIC_ASSERT(_root);
+    return _root->get_courselen();
+}
+
+piw::data_t kbd::alpha2_bundle_t::get_courseoffset()
+{
+    PIC_ASSERT(_root);
+    return _root->get_courseoffset();
 }
 
 void kbd::alpha2_bundle_t::set_threshold1(float t)
@@ -2033,6 +2149,26 @@ void kbd::alpha2_bundle_t::set_mic_quality(unsigned q)
     _root->set_mic_quality(q);
 }
 
+void kbd::alpha2_bundle_t::debounce_time(unsigned long us)
+{
+    _root->loop_.debounce_time(us);
+}
+
+void kbd::alpha2_bundle_t::threshold_time(unsigned long long us)
+{
+    _root->loop_.threshold_time(us);
+}
+
+void kbd::alpha2_bundle_t::key_threshold(unsigned v)
+{
+    _root->loop_.key_threshold(v);
+}
+
+void kbd::alpha2_bundle_t::key_noise(unsigned v)
+{
+    _root->loop_.key_noise(v);
+}
+
 void kbd::alpha2_bundle_t::mic_enable(bool e)
 {
     _root->mic_output_->enable(e,false);
@@ -2108,10 +2244,28 @@ std::string kbd::tau_bundle_t::name()
     return _root->loop_.get_name();
 }
 
-piw::data_t kbd::tau_bundle_t::get_courses()
+piw::data_t kbd::tau_bundle_t::get_columnlen()
 {
     PIC_ASSERT(_root);
-    return _root->get_courses();
+    return _root->get_columnlen();
+}
+
+piw::data_t kbd::tau_bundle_t::get_columnoffset()
+{
+    PIC_ASSERT(_root);
+    return _root->get_columnoffset();
+}
+
+piw::data_t kbd::tau_bundle_t::get_courselen()
+{
+    PIC_ASSERT(_root);
+    return _root->get_courselen();
+}
+
+piw::data_t kbd::tau_bundle_t::get_courseoffset()
+{
+    PIC_ASSERT(_root);
+    return _root->get_courseoffset();
 }
 
 void kbd::tau_bundle_t::set_threshold1(float t)
@@ -2256,6 +2410,26 @@ void kbd::tau_bundle_t::set_pedal_max(unsigned pedal, unsigned value)
 piw::cookie_t kbd::tau_bundle_t::audio_cookie()
 {
     return _root->audio_cookie();
+}
+
+void kbd::tau_bundle_t::debounce_time(unsigned long us)
+{
+    _root->loop_.debounce_time(us);
+}
+
+void kbd::tau_bundle_t::threshold_time(unsigned long long us)
+{
+    _root->loop_.threshold_time(us);
+}
+
+void kbd::tau_bundle_t::key_threshold(unsigned v)
+{
+    _root->loop_.key_threshold(v);
+}
+
+void kbd::tau_bundle_t::key_noise(unsigned v)
+{
+    _root->loop_.key_noise(v);
 }
 
 void kbd::tau_bundle_t::set_hp_quality(unsigned q)

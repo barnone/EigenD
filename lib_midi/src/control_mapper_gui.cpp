@@ -99,6 +99,10 @@ static const char *mapping_help_text = ""
 "\n"
 "When checked, pitch bend MIDI messages will be sent. When unchecked, no pitch bend message will not be sent.\n" 
 "\n" 
+"* Send midi high resolution velocity:\n"
+"\n"
+"When checked, MIDI notes will be sent with a 14 bit velocity as described in the MIDI standard addition CA-031. When properly configured, some plugins like Modartt PianoTeq are already capable of taking advantage of this data to provide much more expressive control over velocity.\n" 
+"\n" 
 "* Active MIDI channel:\n"
 "\n" 
 "Selects the channel on which MIDI messages have to be sent. Values 1 to 16 select a single MIDI channel, the 'poly' setting will spread out MIDI messages over several MIDI channels.\n"
@@ -110,6 +114,10 @@ static const char *mapping_help_text = ""
 "* Maximum poly channel:\n"
 "\n" 
 "Selects the maximum channel that will be used when the active MIDI channel is in poly mode.\n"
+"\n"
+"* Pitch bend up/down calibration (semis):\n"
+"\n" 
+"Calibrates the pitch bend behavior so that pitches in EigenD are correctly sent to the instrument based on what its maximum pitch bend up or down range is. This is not intended for changing the pitch bend limits but effectively ensures that EigenD pitches are sent so that they sound the same in the MIDI instrument.\n"
 "\n"
 "More about 'poly' mode\n"
 "===============================\n"
@@ -475,36 +483,6 @@ namespace midi
         }
     }
 
-    unsigned mapping_delegate_t::get_midi_channel()
-    {
-        return settings_functors_.get_midi_channel_();
-    }
-
-    void mapping_delegate_t::set_midi_channel(unsigned channel)
-    {
-        settings_functors_.set_midi_channel_(channel);
-    }
-
-    unsigned mapping_delegate_t::get_min_channel()
-    {
-        return settings_functors_.get_min_channel_();
-    }
-
-    void mapping_delegate_t::set_min_channel(unsigned channel)
-    {
-        settings_functors_.set_min_channel_(channel);
-    }
-
-    unsigned mapping_delegate_t::get_max_channel()
-    {
-        return settings_functors_.get_max_channel_();
-    }
-
-    void mapping_delegate_t::set_max_channel(unsigned channel)
-    {
-        settings_functors_.set_max_channel_(channel);
-    }
-
     void mapping_delegate_t::clearall()
     {
         if(!AlertWindow::showOkCancelBox(AlertWindow::NoIcon, "Please confirm ...", "Are you certain that you want to clear all the mappings in all tabs?", "No", "Yes"))
@@ -679,7 +657,7 @@ namespace midi
      * mapper_cell_editor_t
      */
 
-    mapper_cell_editor_t::mapper_cell_editor_t(mapper_table_t &mapper): mapper_(mapper), edit_control_scope_(true), edit_fixed_channel_(true), edit_resolution_(true), active_popup_(0), cell_popup_(0)
+    mapper_cell_editor_t::mapper_cell_editor_t(mapper_table_t &mapper): mapper_(mapper), edit_control_scope_(true), edit_fixed_channel_(true), edit_resolution_(true), span_poly_(false), active_popup_(0), cell_popup_(0)
     {
         addAndMakeVisible(label_=new juce::Label(juce::String::empty,"0.0"));
         label_->addMouseListener(this,false);
@@ -716,18 +694,8 @@ namespace midi
         draw_text();
     }
 
-    void mapper_cell_editor_t::draw_text()
+    void mapper_cell_editor_t::colour_cell(mapping_info_t &info, bool span)
     {
-        mapping_info_t info = get_info();
-        if(info.is_valid())
-        {
-            label_->setText(juce::String(info.scale_,1),true);
-        }
-        else
-        {
-            label_->setText("",true);
-        }
-
         juce::Colour txt;
         juce::Colour bg;
         if(!info.is_valid())
@@ -746,6 +714,12 @@ namespace midi
             bg = juce::Colours::darkgrey;
         }
 
+        if(span)
+        {
+            txt = txt.darker();
+            bg = bg.darker();
+        }
+
         label_->setColour(juce::Label::textColourId, txt);
         label_->setColour(juce::Label::backgroundColourId, bg);
 
@@ -755,20 +729,93 @@ namespace midi
         }
     }
 
+    bool mapper_cell_editor_t::is_spanned()
+    {
+        global_settings_t settings = mapper_.settings_functors_.get_settings_();
+        if(span_poly_ && oparam_ > 0 && 0 == settings.midi_channel_)
+        {
+            int poly_range = settings.maximum_midi_channel_ - settings.minimum_midi_channel_;
+            for(int o = oparam_-1; o >= 0 && o >= oparam_-poly_range; --o)
+            {
+                mapping_info_t poly_info = mapper_.mapping_functors_.get_info_(iparam_,o);
+                if(poly_info.is_valid() && PERNOTE_SCOPE == poly_info.scope_)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    void mapper_cell_editor_t::draw_text()
+    {
+        global_settings_t settings = mapper_.settings_functors_.get_settings_();
+        if(span_poly_ && oparam_ > 0 && 0 == settings.midi_channel_)
+        {
+            int poly_range = settings.maximum_midi_channel_ - settings.minimum_midi_channel_;
+            for(int o = oparam_-1; o >= 0 && o >= oparam_-poly_range; --o)
+            {
+                mapping_info_t poly_info = mapper_.mapping_functors_.get_info_(iparam_,o);
+                if(poly_info.is_valid() && PERNOTE_SCOPE == poly_info.scope_)
+                {
+                    int channel = settings.minimum_midi_channel_+(oparam_-o);
+                    label_->setText(juce::String::formatted("%.1f (ch.%02d)", poly_info.scale_, channel), true);
+                    colour_cell(poly_info, true);
+                    return;
+                }
+            }
+        }
+
+        mapping_info_t info = get_info();
+        if(info.is_valid())
+        {
+            if(span_poly_ && 0 == settings.midi_channel_ && PERNOTE_SCOPE == info.scope_)
+            {
+                label_->setText(juce::String::formatted("%.1f (ch.%02d)", info.scale_, settings.minimum_midi_channel_), true);
+            }
+            else
+            {
+                label_->setText(juce::String(info.scale_,1),true);
+            }
+        }
+        else
+        {
+            label_->setText("",true);
+        }
+
+        colour_cell(info, false);
+    }
+
     void mapper_cell_editor_t::mouseEnter(const juce::MouseEvent &e)
     {
+        if(is_spanned())
+        {
+            return;
+        }
+
         label_->setColour(juce::Label::outlineColourId,juce::Colour(0xffdddddd));
         label_->repaint();
     }
 
     void mapper_cell_editor_t::mouseExit(const juce::MouseEvent &e)
     {
+        if(is_spanned())
+        {
+            return;
+        }
+
         label_->setColour(juce::Label::outlineColourId,juce::Colours::darkgrey);
         label_->repaint();
     }
 
     void mapper_cell_editor_t::mouseUp(const juce::MouseEvent &e)
     {
+        if(is_spanned())
+        {
+            return;
+        }
+
         bool modal = isCurrentlyBlockedByAnotherModalComponent();
         juce::Component::mouseUp(e);
         if(!modal && e.mouseWasClicked() && piw::tsd_time() - mapper_.last_modal_dismissal_ > 500000)
@@ -879,12 +926,32 @@ namespace midi
 
 
     /*
+     * mapper_tablelistbox_t
+     */
+
+    mapper_tablelistbox_t::mapper_tablelistbox_t(const juce::String &componentName, juce::TableListBoxModel *model) : juce::TableListBox(componentName, model) { }
+
+    void mapper_tablelistbox_t::mouseWheelMove(const juce::MouseEvent &, float, float)
+    {
+        // always receive the mouseWheelMove event from the containing mapper_table_t component, which will call delegatedMouseWheelMove
+    }
+
+    void mapper_tablelistbox_t::delegatedMouseWheelMove(const MouseEvent& e, float wheelIncrementX, float wheelIncrementY)
+    {
+        if(wheelIncrementX != 0 || wheelIncrementY != 0)
+        {
+            juce::TableListBox::mouseWheelMove(e, wheelIncrementX, wheelIncrementY);
+        }
+    }
+
+
+    /*
      * mapper_table_t
      */
 
     mapper_table_t::mapper_table_t(settings_functors_t settings, mapping_functors_t mapping): settings_functors_(settings), mapping_functors_(mapping), header_table_model_(*this), mapping_table_model_(*this), font_(12.f), last_modal_dismissal_(0), initialized_(false)
     {
-        addAndMakeVisible(table_header_ = new juce::TableListBox(juce::String::empty,&header_table_model_));
+        addAndMakeVisible(table_header_ = new mapper_tablelistbox_t(juce::String::empty,&header_table_model_));
         table_header_->getViewport()->setScrollBarsShown(false, false);
         table_header_->setColour(juce::ListBox::backgroundColourId,juce::Colours::black);
         table_header_->setColour(juce::ListBox::outlineColourId,juce::Colours::grey);
@@ -893,7 +960,7 @@ namespace midi
         table_header_->setHeaderHeight(0);
         table_header_->addMouseListener(this, true);
 
-        addAndMakeVisible(table_mapping_ = new juce::TableListBox(juce::String::empty,&mapping_table_model_));
+        addAndMakeVisible(table_mapping_ = new mapper_tablelistbox_t(juce::String::empty,&mapping_table_model_));
         table_mapping_->setColour(juce::ListBox::backgroundColourId,juce::Colours::black);
         table_mapping_->setColour(juce::ListBox::outlineColourId,juce::Colours::grey);
         table_mapping_->setColour(juce::ListBox::textColourId,juce::Colours::white);
@@ -990,6 +1057,7 @@ namespace midi
         mapper_cell_editor_t *editor = new mapper_cell_editor_t(*this);
         editor->edit_fixed_channel(false);
         editor->edit_resolution(false);
+        editor->span_poly(true);
         return editor;
     }
 
@@ -1001,7 +1069,10 @@ namespace midi
 
     void mapper_table_t::mouseWheelMove(const juce::MouseEvent &e, float wheelIncrementX, float wheelIncrementY)
     {
-        table_mapping_->mouseWheelMove(e, wheelIncrementX, wheelIncrementY);
+        if(wheelIncrementX != 0 || wheelIncrementY != 0)
+        {
+            table_mapping_->delegatedMouseWheelMove(e, wheelIncrementX, wheelIncrementY);
+        }
     }
 
 

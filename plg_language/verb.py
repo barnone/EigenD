@@ -23,7 +23,7 @@ import traceback
 
 from pi import logic,action,async,errors
 from pi.logic.shortcuts import *
-from plg_language import interpreter,imperative,noun,referent
+from . import interpreter,imperative,noun,referent
 
 rules_verb = """
     # subject qualification
@@ -243,13 +243,13 @@ def run_imperative_co(interp,verb,mods,roles,args,flags,fg,text):
 
     context = set()
     sync = []
-    created = []
     removed = []
     dosync = True
     cancel = []
     errs=[]
     nsucceeded = 0
     nerr=0
+    msgs=[]
 
     def result_iter(vs,vf):
         for (id,r) in vs.iteritems():
@@ -277,15 +277,6 @@ def run_imperative_co(interp,verb,mods,roles,args,flags,fg,text):
                 o = referent.Referent.from_prolog(r.args[0])
                 sync.extend(o.concrete_ids())
                 context.update(set(o.concrete_ids()))
-            elif c=='initialise':
-                o = referent.Referent.from_prolog(r.args[0])
-                sync.extend(o.concrete_ids())
-                created.extend(o.concrete_ids())
-            elif c=='created':
-                o = referent.Referent.from_prolog(r.args[0])
-                sync.extend(o.concrete_ids())
-                context.update(set(o.concrete_ids()))
-                created.extend(o.concrete_ids())
             elif c=='nosync':
                 dosync = False
             elif c=='cancel':
@@ -295,6 +286,7 @@ def run_imperative_co(interp,verb,mods,roles,args,flags,fg,text):
                 errs.append((r.args,vid))
             elif c=='msg':
                 msg = r.args[0]
+                msgs.append(msg)
                 print 'message',vid,msg
         if err:
             nerr +=1
@@ -308,19 +300,14 @@ def run_imperative_co(interp,verb,mods,roles,args,flags,fg,text):
         interp.get_context().push_stack(context)
         interp.get_context().extend_scope(context)
 
-    if dosync or created:
+    if dosync:
         print 'starting sync after',verb,':',sync,[piw.address2server(o) for o in sync]
         yield interp.sync(*[piw.address2server(o) for o in sync])
         print 'sync done'
 
-    if created:
-        print 'starting resync'
-        yield interp.sync()
-        print 'resync done'
-
     if nsucceeded:
-        yield async.Coroutine.success('%d verbs failed: %d verbs succeeded' % (nerr,nsucceeded),user_errors=tuple(errs))
+        yield async.Coroutine.success('%d verbs failed: %d verbs succeeded' % (nerr,nsucceeded),user_errors=tuple(errs),user_messages=tuple(msgs))
     elif nerr:
-        yield async.Coroutine.failure('%d verbs failed: %d verbs succeeded' % (nerr,nsucceeded),user_errors=tuple(errs))
+        yield async.Coroutine.failure('%d verbs failed: %d verbs succeeded' % (nerr,nsucceeded),user_errors=tuple(errs),user_messages=tuple(msgs))
 
     yield async.Coroutine.success()

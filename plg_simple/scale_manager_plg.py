@@ -19,7 +19,7 @@
 #
 
 from pi import agent,atom,action,logic,bundles,domain,policy,node,resource,async,talker,collection
-from plg_simple import scale_manager_version as version
+from . import scale_manager_version as version
 import piw
 import os
 import ConfigParser
@@ -49,7 +49,7 @@ class Event(talker.Talker):
 
 class EventList(collection.Collection):
     def __init__(self,agent):
-        collection.Collection.__init__(self,creator=self.__create,wrecker=self.__wreck,names='event',protocols='hidden-connection')
+        collection.Collection.__init__(self,creator=self.__create,wrecker=self.__wreck,names='event',protocols='hidden-connection explicit')
         self.agent = agent
         self.__event = bundles.FastSender(2)
 
@@ -104,7 +104,7 @@ class Agent(agent.Agent):
         self[2]=VirtualScale(self[3].activate)
 
         self.add_verb2(4,'do([],None,role(None,[abstract]),role(when,[abstract,matches(["activation"])]),option(using,[instance(~server)]))', self.__do_verb)
-        self.add_verb2(1,'cancel([],None,option(None,[singular,numeric]))', self.__cancel_verb)
+        self.add_verb2(1,'cancel([],None,option(None,[numeric]))', self.__cancel_verb)
         self.add_verb2(5,'choose([],None,role(None,[ideal([None,scale]),singular]))',self.__choose_verb)
 
     def __choose_verb(self,subject,scale):
@@ -277,7 +277,7 @@ class VirtualScale(atom.Atom):
     def __init__(self, activate):
         atom.Atom.__init__(self,names='scale',protocols='virtual browse')
         self.descriptions = {}
-        self.__user = resource.user_resource_file('Scale Manager','User Scales.txt',version='')
+        self.__user = resource.user_resource_file(resource.scalemanager_dir,'User Scales.txt',version='')
         self.__mtime = None
         self.__selected = None
         self.__selected_name = None
@@ -301,22 +301,22 @@ class VirtualScale(atom.Atom):
 
     def get_user_mtime(self):
         try:
-            return os.path.getmtime(self.__user)
+            return resource.os_path_getmtime(self.__user)
         except:
             return None
 
     def read_user(self):
-        if not os.path.exists(self.__user):
+        if not resource.os_path_exists(self.__user):
             print 'no scale file',self.__user
             fr = resource.find_release_resource('scale_manager','User Scales.txt');
             if not fr:
                 print 'no factory scale file',fr
                 return
             print 'copy',fr,self.__user
-            shutil.copyfile(fr,self.__user)
+            resource.shutil_copyfile(fr,self.__user)
 
         cp = ConfigParser.ConfigParser()
-        cp.read(self.__user)
+        cp.read(resource.WC(self.__user))
 
         for s in sorted(cp.sections()):
             if not cp.has_option(s,'intervals'): 
@@ -338,6 +338,7 @@ class VirtualScale(atom.Atom):
                 self.__activated_name = k
                 self.__activated_scale = v
                 self.update_timestamp()
+                print 'updated choice to',k,v
                 return
 
         print 'no match',scale
@@ -394,16 +395,35 @@ class VirtualScale(atom.Atom):
                     self.update_timestamp()
         return logic.render_term(('',''))
 
+    def resolve_literal(self,name):
+        words = name.split()
+        numbers = []
+
+        for w in words:
+            try: numbers.append(float(w))
+            except: return None
+
+        if len(numbers)<2:
+            return None
+
+        return numbers
+
+
     def resolve_name(self,name):
         if name=='selection' and self.__selected:
              return '[%s]' % self.__ideal(self.__selected)
             
         if name=='activation' and self.__activated_scale:
              return '[%s]' % self.__ideal(self.__activated_scale)
+
+        literal = self.resolve_literal(name)
+        if literal:
+            return '[%s]' % self.__ideal(literal)
             
         for (n,s) in self.values:
             if n==name:
                 return '[%s]' % self.__ideal(s)
+
         return '[]'
 
     def rpc_resolve(self,a):

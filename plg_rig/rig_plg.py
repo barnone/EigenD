@@ -1,9 +1,8 @@
 
-from pi import agent,atom,domain,utils,bundles,upgrade,paths,audio,async,collection,policy,proxy,node,container,logic,action
+from pi import agent,atom,domain,utils,bundles,upgrade,paths,audio,async,collection,policy,proxy,node,container,logic,action,errors,resource
 from pisession import workspace
 import piw
-from plg_rig import rig_version as version
-import rig_native
+from . import rig_version as version,rig_native
 import os
 
 def name_subst(name,find,repl):
@@ -13,17 +12,17 @@ def name_subst(name,find,repl):
         oname.append(w)
     return ' '.join(oname)
 
-class DataProxy(node.Client):
+class DataProxy(rig_native.clockslave):
     def __init__(self,handler):
         self.__handler = handler
-        node.Client.__init__(self)
+        rig_native.clockslave.__init__(self,0)
 
     def client_opened(self):
-        node.Client.client_opened(self)
+        rig_native.clockslave.client_opened(self)
         self.__handler(self.get_data())
 
     def close_client(self):
-        node.Client.close_client(self)
+        rig_native.clockslave.close_client(self)
 
     def client_data(self,v):
         self.__handler(v)
@@ -39,6 +38,14 @@ class RigMonitor(proxy.AtomProxy):
         self.__mainanchor = piw.canchor()
         self.__mainanchor.set_client(self)
         self.__mainanchor.set_address_str(address)
+
+    def clear_downstream_clock(self):
+        if self.__connector:
+            self.__connector.clear_target_clock()
+
+    def set_downstream_clock(self,clock):
+        if self.__connector:
+            self.__connector.set_target_clock(clock)
 
     def disconnect(self):
         self.__connector = None
@@ -93,8 +100,9 @@ def RigOutputPolicy(*args,**kwds):
     return policy.PolicyFactory(RigOutputPolicyImpl,*args,**kwds)
 
 class RigOutput(atom.Atom):
-    def __init__(self,master,ordinal,scope):
+    def __init__(self,master,ordinal,scope,outer):
         atom.Atom.__init__(self,ordinal=ordinal,policy=RigOutputPolicy(),protocols='remove')
+        self.set_connection_scope(scope)
 
         self.__inputs = {}
         self.__master = master
@@ -104,7 +112,7 @@ class RigOutput(atom.Atom):
         self.__clockdom = piw.clockdomain_ctl()
         self.__clockdom.set_source(piw.makestring('*',0))
         self.__clock = piw.clocksink()
-        self.__clockdom.sink(self.__clock,"rig input")
+        self.__clockdom.sink(self.__clock,"%s rig output" % ("outer" if outer else "inner"))
         self.__output = self.get_policy().data_node()
         self.__output.set_clock(self.__clock)
 
@@ -116,7 +124,7 @@ class RigOutput(atom.Atom):
     def set_names(self,value):
         self.__master.set_names(value)
 
-    def property_change(self,key,value):
+    def property_change(self,key,value,delegate):
         if key != 'slave':
             return
 
@@ -145,11 +153,11 @@ class RigOutput(atom.Atom):
 
     def plumb_clocks(self):
         for v in self.__inputs.values():
-            v.set_downstream(self.__clock)
+            v.set_downstream_clock(self.__clock)
 
     def unplumb_clocks(self):
         for v in self.__inputs.values():
-            v.clear_downstream()
+            v.clear_downstream_clock()
 
     def set_domain(self,dom):
         self.unplumb_clocks()
@@ -186,16 +194,19 @@ class RigOutput(atom.Atom):
 
     def add_input(self,iid,inp):
         if iid in self.__inputs:
-            self.__inputs[iid].clear_downstream()
+            self.__inputs[iid].clear_downstream_clock()
             del self.__inputs[iid]
         self.__inputs[iid] = inp
         self.__setup()
 
     def del_input(self,iid):
         if iid in self.__inputs:
-            self.__inputs[iid].clear_downstream()
+            self.__inputs[iid].clear_downstream_clock()
             del self.__inputs[iid]
             self.__setup()
+
+    def input(self):
+        return self.__master
 
 
 class RigInputPlumber(proxy.AtomProxy):
@@ -218,10 +229,18 @@ class RigInputPlumber(proxy.AtomProxy):
         self.__mainanchor.set_address_str('')
         self.__connector = None
 
+    def clear_downstream_clock(self):
+        if self.__connector:
+            self.__connector.clear_target_clock()
+
+    def set_downstream_clock(self,clock):
+        if self.__connector:
+            self.__connector.set_target_clock(clock)
+
     def node_ready(self):
-        self.__output.add_input(self.__iid,self)
         self.__connector = rig_native.connector(self.__ctl,self.__output.get_policy().data_node(),self.__iid,self.__filt)
         self.set_data_clone(self.__connector)
+        self.__output.add_input(self.__iid,self)
 
     def node_removed(self):
         self.__output.del_input(self.__iid)
@@ -302,11 +321,13 @@ class RigInputPolicyImpl:
         self.__closed = True
         self.__connections.clear()
 
-    def get_backend(self,config):
-        backend=self.__ctrl.get_backend(config)
-        return backend,backend
+    def get_controller_backend(self,config):
+        return self.__ctrl.get_backend(config)
 
-    def __add_connection(self,src):
+    def get_data_backend(self,config):
+        return self.__ctrl.get_backend(config)
+
+    def __add_connection(self,src,delegate):
         iid = (max(self.__connection_iids)+1 if self.__connection_iids else 1)
 
         (a,f,c) = self.make_filter(src,iid)
@@ -329,23 +350,23 @@ def RigInputPolicy(*args,**kwds):
 
 
 class RigInput(atom.Atom):
-    def __init__(self,scope,index,output_peer):
+    def __init__(self,scope,index,output_peer,outer):
         self.__output_peer = output_peer
         self.__index = index
         self.__scope = scope
         self.__monitors = {}
 
-        self.__output_peer[self.__index] = RigOutput(self,ordinal=index,scope=self.__output_peer.scope())
+        self.__output_peer[self.__index] = RigOutput(self,ordinal=index,scope=self.__output_peer.scope(),outer=not outer)
         policy=RigInputPolicy(self.__scope,self.__output_peer[self.__index])
 
         atom.Atom.__init__(self,ordinal=index,domain=domain.Aniso(),policy=policy,protocols='remove')
+        self.set_connection_scope(scope)
 
 
     def destroy_input(self):
-        self.__output_peer[self.__index].notify_destroy()
         del self.__output_peer[self.__index]
 
-    def property_change(self,key,value):
+    def property_change(self,key,value,delegate):
         if key in ['name','ordinal']:
             self.__output_peer[self.__index].set_property(key,value,notify=False,allow_veto=False)
 
@@ -369,10 +390,14 @@ class RigInput(atom.Atom):
 
         self.set_domain(domain.Aniso())
 
+    def notify_destroy(self):
+        self.__output_peer[self.__index].notify_destroy()
+        atom.Atom.notify_destroy(self)
+
     def add_monitor(self,inp):
         iid = id(inp)
         if iid in self.__monitors:
-            self.__monitors[iid].clear_downstream()
+            self.__monitors[iid].clear_downstream_clock()
             del self.__monitors[iid]
         self.__monitors[iid] = inp
         self.__setup()
@@ -380,14 +405,15 @@ class RigInput(atom.Atom):
     def del_monitor(self,inp):
         iid = id(inp)
         if iid in self.__monitors:
-            self.__monitors[iid].clear_downstream()
+            self.__monitors[iid].clear_downstream_clock()
             del self.__monitors[iid]
             self.__setup()
 
 class InputList(collection.Collection):
-    def __init__(self,scope):
+    def __init__(self,scope,outer):
         self.__output_peer = None
         self.__scope = scope
+        self.__outer = outer
         collection.Collection.__init__(self,names='input')
 
     def set_output_peer(self,output_peer):
@@ -398,7 +424,8 @@ class InputList(collection.Collection):
         return self.__scope
 
     def create_input(self,name):
-        names = name.split()
+        names = name.split() if name else None
+        ordinal = None
 
         if names:
             try:
@@ -407,11 +434,12 @@ class InputList(collection.Collection):
             except:
                 ordinal = None
         else:
-            ordinal = self.freeinstance()
             names = ''
+        if not ordinal:
+            ordinal = self.freeinstance()
 
         k = self.find_hole()
-        j = RigInput(self.__scope,k,self.__output_peer)
+        j = RigInput(self.__scope,k,self.__output_peer,self.__outer)
         j.set_names(' '.join(names))
         j.set_ordinal(ordinal)
         self[k] = j
@@ -420,7 +448,7 @@ class InputList(collection.Collection):
     @async.coroutine('internal error')
     def instance_create(self,name):
         k = self.find_hole()
-        j = RigInput(self.__scope,k,self.__output_peer)
+        j = RigInput(self.__scope,k,self.__output_peer,self.__outer)
         j.set_ordinal(name)
         self[k] = j
         yield async.Coroutine.success(j)
@@ -429,12 +457,21 @@ class InputList(collection.Collection):
     def instance_wreck(self,k,e,name):
         del self[k]
         e.destroy_input()
+        yield async.Coroutine.success()
 
     def dynamic_create(self,i):
-        return RigInput(self.__scope,i,self.__output_peer)
+        return RigInput(self.__scope,i,self.__output_peer,self.__outer)
 
     def dynamic_destroy(self,i,v):
         v.destroy_input()
+
+    @async.coroutine('internal error')
+    def rpc_delinstance(self,arg):
+        iid = paths.to_relative(paths.to_absolute(arg,scope=self.scope()))
+        r = collection.Collection.rpc_delinstance(self,iid)
+        yield r
+        yield async.Coroutine.completion(r.status(),*r.args(),**r.kwds())
+
         
 class OutputList(atom.Atom):
     def __init__(self,scope=None):
@@ -455,9 +492,6 @@ class OutputList(atom.Atom):
     def set_peer(self,peer):
         self.__peer = peer
 
-    def scope(self):
-        return self.__scope
-
     def rpc_createinstance(self,arg):
         return self.__peer.rpc_createinstance(arg)
 
@@ -465,33 +499,89 @@ class OutputList(atom.Atom):
         return self.__peer.rpc_listinstances(arg)
 
     def rpc_instancename(self,arg):
-        return self.__peer.rpc_instancename(arg)
+        return self.get_property_string('name');
 
+    @async.coroutine('internal error')
     def rpc_delinstance(self,arg):
-        return self.__peer.rpc_delinstance(arg)
+        iid = paths.to_relative(paths.to_absolute(arg,scope=self.scope()))
+        pid = None
+        for v in self.values():
+            if iid == v.id():
+                pid = v.input().id()
+                break
+
+        if pid:
+            r =  self.__peer.rpc_delinstance(pid)
+            yield r
+            yield async.Coroutine.completion(r.status(),*r.args(),**r.kwds())
+        else:
+            yield async.Coroutine.failure('output not in use')
 
 class InnerAgent(agent.Agent):
     def __init__(self,outer_agent):
-        agent.Agent.__init__(self,signature=version,names='eigend',ordinal=1)
+        agent.Agent.__init__(self,signature=version,names='gateway',ordinal=1)
 
-        self.__registry = workspace.create_registry()
+        self.__description = outer_agent.get_description(full=True)
+        print 'inner agent',self.__description
+        self.__registry = workspace.get_registry()
         self.__outer_agent = outer_agent
         self.__name = outer_agent.inner_name
-        self.__workspace = workspace.Workspace(self.__name,self,self.__registry)
+        self.__workspace = workspace.Workspace(self.__name,self,self.__registry,enclosure=self.__description)
 
         self[1] = self.__workspace
         self[2] = OutputList(self.__name)
-        self[3] = InputList(self.__name)
+        self[3] = InputList(self.__name,False)
+
+        constraint = 'or([%s])' % ','.join(['[matches([%s],%s)]' % (m.replace('_',','),m) for m in self.__registry.modules()])
 
         self.add_verb2(1,'create([],None,role(None,[abstract,matches([input])]),option(called,[abstract]))',self.__create_input)
         self.add_verb2(2,'create([],None,role(None,[abstract,matches([output])]),option(called,[abstract]))',self.__create_output)
 
+    def set_owner(self,a):
+        self.__workspace.set_owner(a)
+
+    def rpc_uncreateagent(self,agents):
+        r = []
+        for a in logic.parse_clause(agents):
+            a = paths.to_relative(a,self.__name)
+            if not self.__workspace.unload(a,True):
+                r.append(errors.doesnt_exist('agent','un create'))
+
+        return logic.render_term(r)
+
+    def rpc_createagent(self,plugin):
+        plugin = '_'.join(plugin.split())
+        factory = self.__registry.get_module(plugin)
+
+        if not factory:
+            return logic.render_term(action.error_return('no such agent','create',ENG))
+
+        class DummyDelegate():
+            def __init__(self):
+                self.errors = []
+            def add_error(self,msg):
+                self.errors.append(msg)
+
+        delegate = DummyDelegate()
+        address = self.__workspace.create(factory,delegate)
+
+        if not address:
+            return logic.render_term([action.error_return(m,plugin,'create',ENG) for m in delegate.errors])
+
+        return logic.render_term(action.concrete_return(paths.to_absolute(address,self.__name)))
+
+
+    def update_description(self):
+        self.__description = self.__outer_agent.get_description(full=True)
+        print 'inner agent description now',self.__description
+        self.__workspace.set_enclosure(self.__description)
+
     def __create_input(self,subject,dummy,name):
-        name = action.abstract_string(name)
+        name = action.abstract_string(name) if name else None
         self[3].create_input(name)
 
     def __create_output(self,subject,dummy,name):
-        name = action.abstract_string(name)
+        name = action.abstract_string(name) if name else None
         self.__outer_agent[3].create_input(name)
 
     def save(self,filename):
@@ -515,8 +605,8 @@ class InnerAgent(agent.Agent):
         return self.__workspace.addmodule_rpc(arg)
 
     def rpc_destroy(self,arg):
-        print 'destroy',arg
-        self.__workspace.unload(arg,True)
+        a=logic.parse_clause(arg)
+        self.__workspace.unload(a,True)
 
     def load_started(self,label):
         pass
@@ -538,14 +628,15 @@ class InnerAgent(agent.Agent):
 
     def unload(self,destroy):
         self.__workspace.unload_all(destroy)
-        if destroy:
-            self.__workspace.shutdown()
-        self.notify_destroy()
+        self.__workspace.shutdown()
+
+    def on_quit(self):
+        self.__workspace.on_quit()
 
 
 class OuterAgent(agent.Agent):
     def __init__(self,address,ordinal):
-        agent.Agent.__init__(self,signature=version,names='rig',ordinal=ordinal)
+        agent.Agent.__init__(self,signature=version,names='rig',ordinal=ordinal,protocols='rigouter')
 
         self.file_name = 'rig%d' % ordinal
         self.inner_name = '%s.%s' % (piw.tsd_scope(),self.file_name)
@@ -554,12 +645,13 @@ class OuterAgent(agent.Agent):
 
         self.set_property_string('rig',self.file_name)
 
-        self[2] = OutputList(self.inner_name)
-        self[3] = InputList(None)
+        self[2] = OutputList(None)
+        self[3] = InputList(None,True)
 
         self[3].set_output_peer(self.__inner_agent[2])
 
         self.__inner_agent[3].set_output_peer(self[2])
+
 
         self.add_verb2(1,'create([],None,role(None,[abstract,matches([input])]),option(called,[abstract]))',self.__create_input)
         self.add_verb2(2,'create([],None,role(None,[abstract,matches([output])]),option(called,[abstract]))',self.__create_output)
@@ -572,15 +664,26 @@ class OuterAgent(agent.Agent):
             return True
         return key == 'rig'
 
+    def rpc_createagent(self,plugin):
+        return self.__inner_agent.rpc_createagent(plugin)
+
+    def rpc_uncreateagent(self,agents):
+        return self.__inner_agent.rpc_uncreateagent(agents)
+
+    def property_change(self,key,value,delegate):
+        if key in ['name','ordinal']:
+            self.__inner_agent.update_description()
+
     def unload(self,destroy):
         self.__inner_agent.unload(destroy)
+        agent.Agent.unload(self,destroy)
 
     def __create_input(self,subject,dummy,name):
-        name = action.abstract_string(name)
+        name = action.abstract_string(name) if name else None
         self[3].create_input(name)
 
     def __create_output(self,subject,dummy,name):
-        name = action.abstract_string(name)
+        name = action.abstract_string(name) if name else None
         self.__inner_agent[3].create_input(name)
 
     @async.coroutine('internal error')
@@ -588,7 +691,7 @@ class OuterAgent(agent.Agent):
         yield agent.Agent.load_state(self,state,delegate,phase)
         rig_file = self.rig_file(delegate.path)
         print 'rig load state',phase,rig_file
-        if os.path.exists(rig_file):
+        if resource.os_path_exists(rig_file):
             print 'loading rig',self.inner_name,'from',rig_file
             r = self.__inner_agent.load(rig_file)
             yield r
@@ -609,10 +712,14 @@ class OuterAgent(agent.Agent):
     def server_opened(self):
         agent.Agent.server_opened(self)
         piw.tsd_server(paths.to_absolute('<eigend1>',self.inner_name),self.__inner_agent)
+        self.__inner_agent.set_owner("'%s'"%paths.to_absolute(self.id()));
 
     def close_server(self):
         agent.Agent.close_server(self)
         self.__inner_agent.close_server();
+
+    def on_quit(self):
+        self.__inner_agent.on_quit()
 
 
 agent.main(OuterAgent,gui=True)

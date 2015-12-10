@@ -20,6 +20,9 @@
 
 import glob,zipfile,os
 import sys
+import picross
+import imp
+from pi import resource
 
 def iscompatible(mod_version, state_version):
     mod_version = mod_version.split('.')
@@ -45,23 +48,94 @@ def iscompatible(mod_version, state_version):
 
     return True
 
+def import_module(full_path):
+    mod_name = os.path.basename(full_path)
+    mod_path = os.path.dirname(full_path)
+    pkg_name = os.path.basename(mod_path)
+    pkg_path = os.path.dirname(mod_path)
+
+    if pkg_path not in sys.path:
+        sys.path.insert(0,pkg_path)
+
+    pkg = __import__('%s.%s' % (pkg_name,mod_name))
+
+    return getattr(pkg,mod_name)
+
 class Registry:
-    def __init__(self):
+    def __init__(self,klass):
         self.__registry={}
+        self.__alias={}
+        self.__path = []
+        self.__vocab = {}
+
+        self.add_extra()
+        self.add_path(resource.user_resource_dir('Plugins'))
+        self.add_path(os.path.join(picross.release_root_dir(),'plugins'))
+        self.add_path(os.path.join(picross.contrib_root_dir(),'plugins'))
+        self.add_path(os.path.join(picross.contrib_compatible_dir(),'plugins'))
+
+        for p in self.__path:
+            print 'Agent Path:',p
+            self.scan_path(p,klass)
+
+    def get_vocab(self):
+        return self.__vocab
+
+    def add_extra(self):
+        extra_dir = os.path.join(picross.global_library_dir(),'Global')
+        extra = os.path.join(extra_dir,'paths.txt')
+
+        try: resource.os_makedirs(extra_dir)
+        except: pass
+
+        if not resource.os_path_exists(extra):
+            f = resource.file_open(extra,'w')
+            f.write('# add plugin paths here\n')
+            f.close()
+            return
+
+        paths = resource.file_open(extra,'r').read()
+        for p in paths.splitlines():
+            p = p.strip()
+            if p.startswith('#'): continue
+            if resource.os_path_exists(p):
+                self.add_path(p)
+
+    def add_vocab(self,e,m,c):
+        self.__vocab[e] = (m,c)
+
+    def add_path(self,path):
+        if path not in self.__path:
+            self.__path.append(path)
 
     def dump(self,dumper):
         for (mname,vlist) in self.__registry.iteritems():
             for (version,(cversion,module)) in vlist.iteritems():
-                print '%s:%s:%s %s' % (mname,version,cversion,dumper(module))
+                print 'plugin %s:%s:%s %s' % (mname,version,cversion,dumper(module))
+
+        for (e,(m,c)) in self.__vocab.iteritems():
+            print 'vocab %s %s %s' % (e,m,c)
 
     def modules(self):
         return self.__registry.keys()
+
+    def get_alias(self,name):
+        versions = self.__alias.get(name)
+        if not versions:
+            return None
+        else:
+            vkeys = versions.keys()
+            vkeys.sort(reverse=True)
+            return versions[vkeys[0]]
 
     def get_module(self,name):
         versions = self.__registry.get(name)
 
         if not versions:
-            return None
+            orig = self.get_alias(name)
+            versions = self.__registry.get(orig)
+            if not versions:
+                return None
 
         vkeys = versions.keys()
         vkeys.sort(reverse=True)
@@ -82,6 +156,10 @@ class Registry:
 
     def iter_versions(self,name):
         mlist = self.__registry.get(name)
+        if not mlist:
+            orig = self.get_alias(name)
+            mlist = self.__registry.get(orig)
+
         if mlist:
             for (version,(cversion,module)) in mlist.iteritems():
                     yield (version,cversion,module)
@@ -92,21 +170,65 @@ class Registry:
         if name not in r:
             r[name] = {}
 
-        if version in r[name]:
-            raise RuntimeError('module %s:%s already defined' % (name,version))
+        if version not in r[name]:
+            r[name][version] = (cversion,module)
+            return
 
-        r[name][version] = (cversion,module)
+        print 'module %s:%s already defined' % (name,version)
+
+
+    def add_alias(self,name,version,original):
+        a = self.__alias
+
+        if name not in a:
+            a[name] = {}
+
+        if version not in a[name]:
+            a[name][version] = original
+            return
+
+        print 'alias %s:%s already defined' % (name,version)
+
+
+    def __find_paths(self,path):
+        p = set()
+
+        try:
+            for (root,dirs,files) in resource.safe_walk(path):
+                if 'Manifest' in files:
+                    p.add(root)
+        except:
+            pass
+
+        return list(p)
 
     def scan_path(self,directory,klass):
-        for p in glob.glob(os.path.join(directory,'*')):
+        for p in self.__find_paths(directory):
             try:
-                m = open(p,'r').read()
+                manifest = resource.file_open(os.path.join(p,'Manifest'),'r').read()
+                pkg = os.path.basename(p)
             except:
                 continue
 
-            for a in m.splitlines():
-                a = a.split(':')
-                (name,module,cversion,version) = a[0:4]
-                self.add_module(name,version,cversion,klass(name,version,cversion,module))
-                for e in a[4:]:
-                    self.add_module(e,version,cversion,klass(name,version,cversion,module))
+            for a in manifest.splitlines():
+                a = a.strip()
+                asplit = a.split()
+
+                if len(asplit)==1:
+                    asplit=['agent']+asplit
+
+                if len(asplit)!=2:
+                    continue
+
+                if asplit[0] == 'agent':
+                    a = asplit[1].strip().split(':')
+                    (name,module,cversion,version) = a[0:4]
+                    fullmodule = os.path.join(p,module)
+                    self.add_module(name,version,cversion,klass(name,version,cversion,fullmodule))
+                    for e in a[4:]:
+                        self.add_alias(e,version,name)
+                    continue
+
+                if asplit[0] == 'vocab':
+                    (e,m,c) = asplit[1].strip().split(':')
+                    self.add_vocab(e,m,c)

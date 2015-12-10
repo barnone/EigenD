@@ -25,7 +25,6 @@ struct rig::connector_t::impl_t: piw::client_t, piw::fastdata_t, pic::lckobject_
 {
     impl_t(rig::connector_t *r, piw::server_t *parent, unsigned index, const piw::d2d_nb_t &filter, bool ctl): connector_(r), parent_(parent), index_(index), filter_(filter), output_(PLG_SERVER_TRANSIENT|PLG_SERVER_RO), bridge_(PLG_FASTDATA_SENDER),connected_(false), ctl_(ctl)
     {
-        parent_->child_add(index_,&output_);
         piw::tsd_fastdata(this);
         piw::tsd_fastdata(&bridge_);
     }
@@ -54,8 +53,8 @@ struct rig::connector_t::impl_t: piw::client_t, piw::fastdata_t, pic::lckobject_
     void client_opened()
     {
         piw::client_t::client_opened();
-        populate();
 
+        parent_->child_add(index_,&output_);
         output_.set_flags(get_effective_flags());
         output_.set_data(get_data());
 
@@ -66,12 +65,15 @@ struct rig::connector_t::impl_t: piw::client_t, piw::fastdata_t, pic::lckobject_
             enable(true,true,false);
             connected_ = true;
         }
+
+        populate();
     }
 
     void close_client()
     {
         piw::client_t::close_client();
 
+        output_.close_server();
         output_.set_flags(PLG_SERVER_TRANSIENT|PLG_SERVER_RO);
         output_.set_data(piw::data_t());
 
@@ -152,7 +154,7 @@ struct rig::connector_t::impl_t: piw::client_t, piw::fastdata_t, pic::lckobject_
     bool ctl_;
 };
 
-rig::connector_t::connector_t(bool ctl,rig::output_t *parent,unsigned index, const piw::d2d_nb_t &filter): piw::client_t(PLG_CLIENT_CLOCK)
+rig::connector_t::connector_t(bool ctl,rig::output_t *parent,unsigned index, const piw::d2d_nb_t &filter): clockslave_t(PLG_CLIENT_CLOCK)
 {
     impl_ = new impl_t(this,parent,index,filter,ctl);
 }
@@ -165,18 +167,18 @@ rig::connector_t::~connector_t()
 
 void rig::connector_t::client_clock()
 {
-    piw::client_t::client_clock();
+    clockslave_t::client_clock();
 }
 
 void rig::connector_t::client_opened()
 {
-    piw::client_t::client_opened();
+    clockslave_t::client_opened();
     clone(impl_);
 }
 
 void rig::connector_t::close_client()
 {
-    piw::client_t::close_client();
+    clockslave_t::close_client();
     impl_->close_client();
 }
 
@@ -197,4 +199,50 @@ rig::output_t::output_t(): piw::server_t(PLG_SERVER_RO|PLG_SERVER_TRANSIENT|PLG_
 
 rig::output_t::~output_t()
 {
+}
+
+rig::clockslave_t::clockslave_t(unsigned client_flags): piw::client_t(client_flags), clock_(0)
+{
+}
+
+void rig::clockslave_t::set_target_clock(bct_clocksink_t *clock)
+{
+    if(open())
+    {
+        clear_downstream();
+        clock_=clock;
+
+        if(clock_)
+        {
+            set_downstream(clock_);
+        }
+    }
+}
+
+void rig::clockslave_t::client_opened()
+{
+    piw::client_t::client_opened();
+    if(clock_)
+    {
+        set_downstream(clock_);
+    }
+}
+
+void rig::clockslave_t::client_clock()
+{
+    piw::client_t::client_clock();
+    if(clock_)
+    {
+        clear_downstream();
+        set_downstream(clock_);
+    }
+}
+
+void rig::clockslave_t::close_client()
+{
+    piw::client_t::close_client();
+    if(clock_)
+    {
+        clear_downstream();
+    }
 }

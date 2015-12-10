@@ -19,9 +19,14 @@
 #
 
 from pi import atom,database,utils,logic,container,node,action,const,async,rpc,paths,index
-from pibelcanto import lexicon
-from plg_language import noun,verb,macro,imperative
+from . import noun,verb,macro,imperative
 import piw
+
+def popset(s):
+    if s:
+        for i in s:
+            return i
+    return None
 
 class DatabaseProxy(database.DatabaseProxy):
     def __init__(self,db,parent=None,rig=None):
@@ -31,21 +36,30 @@ class DatabaseProxy(database.DatabaseProxy):
 class Database(database.Database):
     proxy = DatabaseProxy
 
-    def __init__(self):
+    def __init__(self,*args,**kwds):
         self.__primitives = {}
         self.__index = {}
         self.__hostcache = database.PropertyCache()
 
-        database.Database.__init__(self)
+        database.Database.__init__(self,*args,**kwds)
 
         self.add_module(noun)
         self.add_module(verb)
         self.add_module(imperative)
 
-        self.add_lexicon(lexicon.lexicon)
-
         # widget manager for updating widget names if they change
         self.__widget_manager = None
+
+    def find_full_rig_display_desc(self, id):
+        aid = paths.id2server(id)
+        rid = popset(self.get_propcache('host').get_valueset(aid))
+
+        if rid:
+            return ' '.join([self.find_full_rig_display_desc(rid),self.find_full_display_desc(id)])
+        else:
+            return self.find_full_display_desc(id)
+
+
 
     def start(self,name,rig=None):
         if name not in self.__index:
@@ -68,7 +82,7 @@ class Database(database.Database):
         return database.Database.get_propcache(self,name)
 
     def make_rules(self,ap,init,parts):
-        (rules,props,verbs) = database.Database.make_rules(self,ap,init,parts)
+        (rules,props,verbs,vocab) = database.Database.make_rules(self,ap,init,parts)
 
         pa,pd = props['props']
 
@@ -85,7 +99,7 @@ class Database(database.Database):
         else:
             pd.append('inrig')
 
-        return rules,props,verbs
+        return rules,props,verbs,vocab
 
     @async.coroutine('internal error')
     def sync(self, *args):

@@ -19,7 +19,7 @@
 #
 
 from pi import agent,atom,action,domain,bundles,utils,logic,node,async,schedproxy,const,upgrade,policy,paths,talker,collection
-from plg_simple import talker_version as version
+from . import talker_version as version
 import piw
 import operator
 
@@ -109,15 +109,10 @@ class Event(talker.Talker):
 
         talker.Talker.__init__(self,self.__key.agent.finder,fast,cookie,names='event',ordinal=index,protocols='remove')
 
-    @async.coroutine('internal error')
-    def redo(self):
-        old_phrase = self.get_value()
-        yield self.set_phrase(old_phrase)
-
     def detach_event(self):
         self.__key.key_aggregator.clear_output(self.__index)
 
-    def property_change(self,key,value):
+    def property_change(self,key,value,delegate):
         if key=='help' and value and value.is_string():
             self.__key.agent.update()
 
@@ -126,7 +121,7 @@ class Event(talker.Talker):
 
 class Key(collection.Collection):
     def __init__(self,agent,controller,index):
-        collection.Collection.__init__(self,creator=self.__create,wrecker=self.__wreck,ordinal=index,names='k',protocols='hidden-connection remove')
+        collection.Collection.__init__(self,creator=self.__create,wrecker=self.__wreck,ordinal=index,names='key',protocols='hidden-connection remove explicit')
         self.__event = piw.fasttrigger(const.light_unknown)
         self.__event.attach_to(controller,index)
         self.__handler = piw.change2_nb(self.__event.trigger(),utils.changify(self.event_triggered))
@@ -140,31 +135,45 @@ class Key(collection.Collection):
 
         self.set_private(node.Server(rtransient=True)) # kept in there for backwards compatibility
         self.set_internal(250,atom.Atom(domain=domain.Trigger(),init=False,names='activate',policy=policy.TriggerPolicy(self.__handler),transient=True))
-        self.agent.light_convertor.set_status_handler(self.index,0,0,piw.slowchange(utils.changify(self.set_status)))
 
         self.set_internal(247, atom.Atom(domain=domain.BoundedInt(0,3),names='default colour',init=3,policy=atom.default_policy(self.set_color)))
-        self.set_internal(248, atom.Atom(domain=domain.BoundedInt(-32767,32767),names='key row',init=0,policy=atom.default_policy(self.__change_key_row)))
-        self.set_internal(249, atom.Atom(domain=domain.BoundedInt(-32767,32767),names='key column',init=0,policy=atom.default_policy(self.__change_key_column)))
+        self.set_internal(248, atom.Atom(domain=domain.BoundedInt(-32767,32767),names='key column',init=0,policy=atom.default_policy(self.__change_key_column)))
+        self.set_internal(249, atom.Atom(domain=domain.BoundedInt(-32767,32767),names='key row',init=0,policy=atom.default_policy(self.__change_key_row)))
+        self.set_internal(245, atom.Atom(domain=domain.Bool(),names='key column end relative',init=False,policy=atom.default_policy(self.__change_key_column_endrel)))
+        self.set_internal(246, atom.Atom(domain=domain.Bool(),names='key row end relative',init=False,policy=atom.default_policy(self.__change_key_row_endrel)))
 
-    def __change_key_row(self,val):
-        self.agent.light_convertor.remove_status_handler(self.index)
-        self.get_internal(248).set_value(val)
-        t = utils.maketuple((piw.makelong(self.get_internal(248).get_value(),0),piw.makelong(self.get_internal(249).get_value(),0)), 0)
-        self.__event.set_key(t) 
-        self.key_mapper.set_functor(piw.d2d_const(t))
-        self.agent.light_convertor.set_status_handler(self.index,self.get_internal(248).get_value(),self.get_internal(249).get_value(),piw.slowchange(utils.changify(self.set_status)))
-        self.agent.light_convertor.set_default_color(self.index,self.get_internal(247).get_value())
-        return False
+        self.agent.light_convertor.set_status_handler(self.index,self.__make_key_coordinate(),piw.slowchange(utils.changify(self.set_status)))
 
     def __change_key_column(self,val):
-        self.agent.light_convertor.remove_status_handler(self.index)
-        self.get_internal(249).set_value(val)
-        t = utils.maketuple((piw.makelong(self.get_internal(248).get_value(),0),piw.makelong(self.get_internal(249).get_value(),0)), 0)
-        self.__event.set_key(t) 
-        self.key_mapper.set_functor(piw.d2d_const(t))
-        self.agent.light_convertor.set_status_handler(self.index,self.get_internal(248).get_value(),self.get_internal(249).get_value(),piw.slowchange(utils.changify(self.set_status)))
-        self.agent.light_convertor.set_default_color(self.index,self.get_internal(247).get_value())
+        self.get_internal(248).set_value(val)
+        self.__key_changed()
         return False
+
+    def __change_key_row(self,val):
+        self.get_internal(249).set_value(val)
+        self.__key_changed()
+        return False
+
+    def __change_key_column_endrel(self,val):
+        self.get_internal(245).set_value(val)
+        self.__key_changed()
+        return False
+
+    def __change_key_row_endrel(self,val):
+        self.get_internal(246).set_value(val)
+        self.__key_changed()
+        return False
+
+    def __make_key_coordinate(self):
+        return piw.coordinate(self.get_internal(248).get_value(),self.get_internal(249).get_value(),self.get_internal(245).get_value(),self.get_internal(246).get_value())
+
+    def __key_changed(self):
+        self.agent.light_convertor.remove_status_handler(self.index)
+        t = self.__make_key_coordinate()
+        self.__event.set_key(t) 
+        self.key_mapper.set_functor(piw.d2d_const(t.make_data(0)))
+        self.agent.light_convertor.set_status_handler(self.index,t,piw.slowchange(utils.changify(self.set_status)))
+        self.agent.light_convertor.set_default_color(self.index,self.get_internal(247).get_value())
 
     def rpc_instancename(self,a):
         return 'action'
@@ -188,13 +197,13 @@ class Key(collection.Collection):
 
     def event_triggered(self,v):
         self.get_internal(250).get_policy().set_status(piw.makelong(0,0))
-        self.set_status(piw.makelong(self.agent.light_convertor.get_status(self.get_internal(248).get_value(),self.get_internal(249).get_value()),piw.tsd_time()))
+        self.set_status(piw.makelong(self.agent.light_convertor.get_status(self.__make_key_coordinate()),piw.tsd_time()))
 
     def set_status(self,v):
         self.get_internal(250).get_policy().set_status(v)
 
     def isinternal(self,k):
-        if k == 247 or k == 248 or k == 249 or k == 250: return True
+        if k == 245 or k == 246 or k == 247 or k == 248 or k == 249 or k == 250: return True
         return atom.Atom.isinternal(self,k)
 
     def set_color(self,c):
@@ -247,13 +256,13 @@ class Key(collection.Collection):
 
 class Agent(agent.Agent):
     def __init__(self, address, ordinal):
-        agent.Agent.__init__(self,signature=version,names='talker',ordinal=ordinal)
+        agent.Agent.__init__(self,signature=version,names='talker',ordinal=ordinal,protocols='talker')
 
-        self.add_verb2(2,'do([],None,role(None,[abstract]),role(when,[singular,numeric]),option(called,[singular,numeric]))', self.__do_verb)
-        self.add_verb2(8,'cancel([],None,role(None,[singular,numeric]),option(called,[singular,numeric]))', self.__cancel_verb)
-        self.add_verb2(5,'colour([],None,role(None,[singular,numeric]),role(to,[singular,numeric]))', self.__color_verb)
-        self.add_verb2(6,'colour([],None,role(None,[singular,numeric]),role(to,[singular,numeric]),role(from,[singular,numeric]))', self.__all_color_verb)
-        self.add_verb2(9,'do([re],None,role(None,[singular,numeric]))', self.__redo_k_verb)
+        self.add_verb2(2,'do([],None,role(None,[abstract]),role(when,[numeric]),option(called,[numeric]))', self.__do_verb)
+        self.add_verb2(8,'cancel([],None,role(None,[numeric]),option(called,[numeric]))', self.__cancel_verb)
+        self.add_verb2(5,'colour([],None,role(None,[numeric]),role(to,[numeric]))', self.__color_verb)
+        self.add_verb2(6,'colour([],None,role(None,[numeric]),role(to,[numeric]),role(from,[numeric]))', self.__all_color_verb)
+        self.add_verb2(9,'do([re],None,role(None,[numeric]))', self.__redo_k_verb)
         self.add_verb2(10,'do([re],None)', self.__redo_all_verb)
 
         self.domain = piw.clockdomain_ctl()
@@ -270,7 +279,7 @@ class Agent(agent.Agent):
 
         self.activation_input = bundles.VectorInput(self.controller.event_cookie(), self.domain,signals=(1,2))
 
-        self[3] = collection.Collection(creator=self.__create,wrecker=self.__wreck,names='k',inst_creator=self.__create_inst,inst_wrecker=self.__wreck_inst,protocols='hidden-connection')
+        self[3] = collection.Collection(creator=self.__create,wrecker=self.__wreck,names='key',inst_creator=self.__create_inst,inst_wrecker=self.__wreck_inst,protocols='hidden-connection explicit')
         self[4] = PhraseBrowser(self.__eventlist,self.__keylist)
 
         self[5] = atom.Atom(domain=domain.Aniso(),policy=self.activation_input.merge_nodefault_policy(2,False),names='controller input')

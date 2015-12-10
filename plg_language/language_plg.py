@@ -20,8 +20,8 @@
 
 from pi import agent,atom,domain,errors,action,logic,async,index,utils,bundles,resource,paths,node,container,upgrade,timeout,help_manager,resource
 from pi.logic.shortcuts import *
-from plg_language import interpreter,database,feedback,noun,builtin_misc,context,variable,script,stage_server,widget,deferred,plumber
-from plg_language import interpreter_version as version
+from . import interpreter,database,feedback,noun,builtin_misc,context,variable,script,stage_server,widget,deferred,plumber
+from . import interpreter_version as version
 
 import piw
 import time
@@ -32,7 +32,7 @@ def read_script(filename):
     dirname = os.path.dirname(filename)
 
     print 'started',filename
-    script = open(filename,'r')
+    script = resource.file_open(filename,'r')
 
     for line in script:
         line = line.strip()
@@ -63,8 +63,11 @@ class Agent(agent.Agent):
         agent.Agent.__init__(self,signature=version, names='interpreter',protocols='langagent has_subsys',container=10,ordinal=ordinal)
         self.__transcript = resource.open_logfile('transcript')
 
-        self.database = database.Database()
+        self.database = database.Database(lexicon_changed=self.__lexicon_changed)
         self.help_manager = help_manager.HelpManager()
+        self.__db_started = False
+
+        self.set_property_string('timestamp',self.database.get_lexicon().get_timestamp())
 
         self.__builtin = builtin_misc.Builtins(self,self.database)
         self[12] = script.ScriptManager(self,self.__runner)
@@ -97,7 +100,7 @@ class Agent(agent.Agent):
 
         self[1] = atom.Atom(names='inputs')
 
-        self[1][1] = atom.Atom(domain=domain.BoundedFloat(0,1),policy=self.input.vector_policy(1,False),names='activation input')
+        self[1][1] = atom.Atom(domain=domain.BoundedFloat(0,1),policy=self.input.vector_policy(1,False),names='key input')
         self[1][2] = atom.Atom(domain=domain.BoundedFloat(-1,1),policy=self.input.vector_policy(2,False),names='roll input')
         self[1][3] = atom.Atom(domain=domain.BoundedFloat(-1,1),policy=self.input.vector_policy(3,False),names='yaw input')
         self[1][4] = atom.Atom(domain=domain.BoundedFloat(0,1),policy=self.input.vector_policy(4,False),names='pressure input')
@@ -106,27 +109,20 @@ class Agent(agent.Agent):
 
         self[2] = atom.Atom(init='',names='word output',domain=domain.String())
 
-        self[5] = atom.Atom(names='main kgroup')
-        self[5][1] = bundles.Output(1,False, names='activation output')
+        self[5] = atom.Atom(names='outputs')
+        self[5][1] = bundles.Output(1,False, names='key output')
         self[5][2] = bundles.Output(2,False, names='roll output')
         self[5][3] = bundles.Output(3,False, names='yaw output')
         self[5][4] = bundles.Output(4,False, names='pressure output')
 
-        self[9] = atom.Atom(names='auxilliary kgroup')
-        self[9][1] = bundles.Output(1,False, names='activation output')
-        self[9][2] = bundles.Output(2,False, names='roll output')
-        self[9][3] = bundles.Output(3,False, names='yaw output')
-        self[9][4] = bundles.Output(4,False, names='pressure output')
-
         self.output1 = bundles.Splitter(self.domain,*self[5].values())
-        self.output2 = bundles.Splitter(self.domain,*self[9].values())
 
-        self.cloner.set_filtered_output(3,self.output1.cookie(), piw.last_lt_filter(9))
-        self.cloner.set_filtered_output(4,self.output2.cookie(), piw.last_gt_filter(10))
+        self.cloner.set_output(2,self.output1.cookie())
 
         self.add_verb2(30,'message([],None,role(None,[abstract]))', self.__message)
         self.add_verb2(150,'execute([],None,role(None,[abstract]))',self.__runscript)
         self.add_verb2(151,'load([],None,role(None,[matches([help])]))',self.__loadhelp)
+        self.add_verb2(152,'identify([],None,role(None,[concrete]))',self.__identify)
 
         self.add_builtins(self.__builtin)
         self.add_builtins(self.__ctxmgr)
@@ -157,6 +153,15 @@ class Agent(agent.Agent):
 
         self[15] = self.widgets
 
+    def __lexicon_changed(self):
+        l = self.database.get_lexicon()
+        t = l.get_timestamp()
+        self.set_property_string('timestamp',t)
+
+        print 'lexicon changed',t
+        for (e,(m,c)) in l.lexicon_iter(False):
+            print "%s -> %s (%s)" % (e,m,c)
+
     def __loadhelp(self,subject,dummy):
         self.help_manager.update()
         self.database.update_all_agents()
@@ -164,6 +169,12 @@ class Agent(agent.Agent):
 
     def interpret(self,interp,scope,words):
         return noun.interpret(interp,scope,words)
+
+    def property_veto(self,key,value):
+        if agent.Agent.property_veto(self,key,value):
+            return True
+
+        return key in ['timestamp']
 
     @async.coroutine('internal error')
     def __runscript(self,subject,arg):
@@ -218,7 +229,7 @@ class Agent(agent.Agent):
         text = '\n'.join(rv)
 
         if out:
-            f=open(out,'w')
+            f=resource.file_open(out,'w')
             f.write(text)
             f.close()
             text = out
@@ -242,6 +253,30 @@ class Agent(agent.Agent):
 
         yield async.Coroutine.success(rv)
 
+    def rpc_lexicon(self,arg):
+        l = self.database.get_lexicon()
+        t = l.get_timestamp()
+        d = [ x for x in l.lexicon_iter() ]
+        nd = len(d)
+        i = int(arg)
+
+        if i<0 or i>=nd:
+            return async.success('%s:%d:' % (t,nd))
+
+        d = d[i:i+100]
+        ds = logic.render_termlist([logic.make_term(e,m,c) for (e,(m,c)) in d])
+        return '%s:%d:%s' % (t,nd,ds)
+
+    def __identify(self,subject,target):
+        ids = action.concrete_objects(target)
+        ids = [self.database.to_database_id(i) for i in ids]
+        print 'identifying',ids
+        rv = []
+        for i in ids:
+            d = self.database.find_full_rig_display_desc(i)
+            rv.append(action.message_return(d))
+        return rv
+
     @async.coroutine('internal error')
     def rpc_identify(self,arg):
         words = arg.strip().split()
@@ -252,6 +287,7 @@ class Agent(agent.Agent):
 
         (objs,) = r.args()
         ids = objs.concrete_ids()
+        print 'identifying',ids
         rv = []
         for id in ids:
             d = "'%s' %s" % (id,self.database.find_full_desc(id))
@@ -313,6 +349,8 @@ class Agent(agent.Agent):
         class SubDelegate(interpreter.Delegate):
             def error_message(dself,err):
                 return self.error_message(err)
+            def user_message(dself,err):
+                return self.user_message(err)
             def buffer_done(dself,*a,**kw):
                 return 
 
@@ -419,12 +457,16 @@ class Agent(agent.Agent):
                 m.append(w)
         else:
             for w in words:
-                music=self.database.translate_to_music2(w) 
+                music=self.database.expand_to_music(w) 
                 if music:
                     m.extend(music)
                 else:
                     m.extend(w)
         self.__history.message(m,desc,speaker)
+
+    def user_message(self,err):
+        print 'language_plg:user_message',err
+        self.message(['*',err])
 
     def error_message(self,err):
         speaker='' 
@@ -435,8 +477,9 @@ class Agent(agent.Agent):
         self.message(msg,'err_msg',speaker)    
 
     def rpc_inject(self,msg):
+        print 'rpc_inject',msg
         for word in msg.split():
-            m = self.database.translate_to_music2(word)
+            m = self.database.expand_to_music(word)
 
             for music in m:
                 if music.startswith('!'): music=music[1:]
@@ -451,9 +494,9 @@ class Agent(agent.Agent):
         self[11].set_property_string('timestamp',str(t))
 
     def word_in(self,word):
-        print 'word input:',word
         english = self.database.translate_to_english(word) or ''
         music = self.database.translate_to_music(word) or ''
+        print 'word input:',word,english,music
         self.__log(english,music)
         self.queue.interpret(word)
 
@@ -472,7 +515,7 @@ class Agent(agent.Agent):
 
     @async.coroutine('internal error')
     def rpc_execfile(self,filename):
-        if not os.path.exists(filename):
+        if not resource.os_path_exists(filename):
             print 'script:',filename,'doesnt exist'
             yield async.Coroutine.success()
 
@@ -529,10 +572,27 @@ class Agent(agent.Agent):
         self.__log(*words)
         return self.interpreter.process_block(words)
 
+    def start_database(self):
+        if not self.__db_started:
+            self.__db_started = True
+            print 'starting database'
+            self.database.start(piw.tsd_scope())
+
+    def stop_database(self):
+        if self.__db_started:
+            self.__db_started = False
+            print 'stopping database'
+            self.database.stop(piw.tsd_scope())
+
+    def agent_preload(self,filename):
+        self.stop_database()
+
+    def agent_postload(self,filename):
+        self.start_database()
+
     def server_opened(self):
         agent.Agent.server_opened(self)
         self.advertise('<language>')
-        self.database.start(piw.tsd_scope())
 
         # startup stage server
         print "starting up stage server"
@@ -541,9 +601,10 @@ class Agent(agent.Agent):
 
         self.stageServer = stage_server.StageXMLRPCServer(self, self.snapshot, self.xmlrpc_server_port)
         self.stageServer.start()
+        self.start_database()
 
     def close_server(self):
-        self.database.stop()
+        self.stop_database()
         agent.Agent.close_server(self)
 
         # shutdown stage server

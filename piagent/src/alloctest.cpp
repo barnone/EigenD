@@ -22,36 +22,69 @@
 #include <picross/pic_time.h>
 #include <piagent/pia_fastalloc.h>
 
-#define THREADS 16
+#define THREADS 6
+#define ALLOCATIONS 100000000
+#define REPORT 100000
 
-void __tester(void *a_)
+class alloc_thread_t: public pic::thread_t
 {
-    pia::fastalloc_t *a = (pia::fastalloc_t *)a_;
+    public:
 
-    for(;;)
-    {
-        pia::fastalloc_t::deallocator_t d;
-        unsigned s=1+random()%4096;
-        void *m1=a->allocator_xmalloc(s,&d);
-        d(m1);
-    }
-}
+        alloc_thread_t(unsigned index): pic::thread_t((index%2==0)?PIC_THREAD_PRIORITY_NORMAL:PIC_THREAD_PRIORITY_REALTIME), index_(index) {}
+        ~alloc_thread_t() {}
+
+        void start() { run(); }
+
+        void thread_main()
+        {
+            printf("%2u thread main\n", index_); fflush(stdout);
+            pic::nballocator_t *a = pic::nballocator_t::tsd_getnballocator();
+            printf("%2u thread starting allocations\n", index_); fflush(stdout);
+
+            for(unsigned i=0;i<ALLOCATIONS;i++)
+            {
+
+                if(i%REPORT==0) { printf("thread %2u %u allocations            \n",index_,i); fflush(stdout); }
+
+                pic::nballocator_t::deallocator_t dealloc;
+                void *dealloc_arg;
+
+                unsigned s = 1+rand()%4096;
+                void *m = a->allocator_xmalloc(PIC_ALLOC_NB,s,&dealloc,&dealloc_arg);
+
+                dealloc(m,dealloc_arg);
+            }
+        }
+
+        void thread_init() { printf("%2u thread init\n", index_); }
+        void thread_term() { printf("%2u thread term\n", index_); }
+
+    private:
+        unsigned index_;
+};
 
 int main()
 {
     pia::fastalloc_t a;
+    pic::nballocator_t::tsd_setnballocator(&a);
+    alloc_thread_t *threads[THREADS];
+
+    printf("starting threads\n"); fflush(stdout);
 
     for(unsigned i=0; i<THREADS; ++i)
     {
-        pic_thread_t *t = new pic_thread_t;
-        pic_thread_create(t,0,__tester,&a);
-        pic_thread_run(t);
+        threads[i] = new alloc_thread_t(i);
+        threads[i]->start();
     }
 
-    for(;;)
+    printf("waiting for threads\n"); fflush(stdout);
+
+    for(unsigned i=0; i<THREADS; ++i)
     {
-        pic_microsleep(1000);
+        threads[i]->wait();
+        printf("thread %2u finished\n",i); fflush(stdout);
     }
 
+    printf("finished\n");
     return 0;
 }

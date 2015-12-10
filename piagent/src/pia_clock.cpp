@@ -25,7 +25,6 @@
 #include <picross/pic_flipflop.h>
 #include <picross/pic_ilist.h>
 #include <picross/pic_stl.h>
-#include <picross/pic_mlock.h>
 
 #include <list>
 #include <memory>
@@ -45,6 +44,22 @@ typedef std::list<source_t *> sourcelist_t;
 typedef std::list<notifier_t *> notifierlist_t;
 
 typedef pia_clocklist_t::impl_t clockimpl_t;
+
+template <class T> bool list_remove(std::list<T> &list, const T &value)
+{
+    typename std::list<T>::iterator i;
+
+    for(i=list.begin(); i!=list.end(); i++)
+    {
+        if(*i==value)
+        {
+            list.erase(i);
+            return true;
+        }
+    }
+
+    return false;
+}
 
 struct masterlist_t: virtual public pic::lckobject_t
 {
@@ -95,7 +110,7 @@ struct sink_t: virtual public pic::lckobject_t
     domain_t *domain_;
     bool mark_;
     bool enabled_;
-    const char *name_;
+    pia_data_t name_;
     int suppressed_;
     pia_ctx_t env_;
 };
@@ -105,7 +120,7 @@ struct domain_t: virtual public pic::lckobject_t
     domain_t(clockimpl_t *l, const pia_ctx_t &e, bct_clockdomain_t *c);
 
     void set_source(const pia_data_t &);
-    void enroll(bct_clocksink_t *s,const char *n);
+    void enroll(bct_clocksink_t *s,const pia_data_t &n);
     void drop(sink_t *s, bool);
 
     void detach(bool notify);
@@ -212,7 +227,7 @@ struct pia_clocklist_t::impl_t
 
 std::ostream& operator<<(std::ostream &o,sink_t *s)
 {
-    o << s->name_ << "(" << s->env_->tag() << ")";
+    o << s->name_ << "(" << s->env_->scope() << ':' << s->env_->tag() << ':' << ((void *)s) << ")";
     return o;
 }
 
@@ -238,18 +253,29 @@ bool sink_t::add_upstream(sink_t *up)
 {
     if(!attached_)
     {
+#if CLOCK_DEBUG
+        pic::logmsg() << "****** add upstream bad (1)";
+#endif
         return false;
     }
 
     domain_->clocklist_->clearmarks();
 
+    /*
     if(up->is_upstream(this))
     {
+#if CLOCK_DEBUG
+        pic::logmsg() << "****** add upstream bad (2)";
+#endif
         return false;
     }
+    */
 
     if(up->domain_->iso_ && up->domain_->source_!=domain_->source_)
     {
+#if CLOCK_DEBUG
+        pic::logmsg() << "****** add upstream bad (3)";
+#endif
         return false;
     }
 
@@ -257,6 +283,9 @@ bool sink_t::add_upstream(sink_t *up)
     up->down_.push_front(this);
     domain_->clocklist_->build();
 
+#if CLOCK_DEBUG
+    pic::logmsg() << "****** add upstream good " << up << "->" << this;
+#endif
     return true;
 }
 
@@ -267,9 +296,11 @@ void sink_t::remove_upstream(sink_t *up)
         return;
     }
 
-    up_.remove(up);
-    up->down_.remove(this);
-    domain_->clocklist_->build();
+    if(list_remove(up_,up))
+    {
+        up->down_.remove(this);
+        domain_->clocklist_->build();
+    }
 }
 
 void sink_t::dfs(source_t *source)
@@ -444,7 +475,7 @@ void domain_t::changed()
     changed_.idle(env_->appq(), changed_callback, this, pia_data_t());
 }
 
-void domain_t::enroll(bct_clocksink_t *bc,const char *n)
+void domain_t::enroll(bct_clocksink_t *bc,const pia_data_t &n)
 {
     if(!attached_)
     {
@@ -911,11 +942,6 @@ int sink_t::api_add_upstream(bct_clocksink_host_ops_t **hops, bct_clocksink_t *u
 
 int sink_t::api_remove_upstream(bct_clocksink_host_ops_t **hops, bct_clocksink_t *up_)
 {
-    if(!up_->host_ops)
-    {
-        return 0;
-    }
-
     sink_t *s = PIC_STRBASE(sink_t, hops, ops_);
 
     try
@@ -1140,7 +1166,8 @@ int domain_t::api_clocksink(bct_clockdomain_host_ops_t **hops, bct_clocksink_t *
     try
     {
         pia_mainguard_t guard(d->env_->glue());
-        d->enroll(s,n ? n : "slartibartfast");
+        pia_data_t name = d->env_->glue()->allocate_cstring(n ? n : "anonymous");
+        d->enroll(s, name);
         return 1;
     }
     PIA_CATCHLOG_EREF(d->env_)

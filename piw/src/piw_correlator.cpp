@@ -811,7 +811,11 @@ correlator_voice_t::correlator_voice_t(impl_t *root, unsigned id): piw::event_da
 
 piw::correlator_t::correlator_t(piw::clockdomain_ctl_t *d, const std::string &sigmap, const piw::d2d_nb_t &evtmap, const cookie_t &c,unsigned thr,unsigned poly) : impl_(new impl_t(d,sigmap,evtmap,c,thr,poly)) { }
 
-piw::correlator_t::~correlator_t() { delete impl_; }
+piw::correlator_t::~correlator_t()
+{
+    tracked_invalidate();
+    delete impl_;
+}
 
 void piw::correlator_t::set_latency(unsigned signal,unsigned iid, unsigned latency)
 {
@@ -922,7 +926,7 @@ bool correlator_default_t::fastdata_receive_event(const piw::data_nb_t &d, const
     {
         //pic::logmsg() << (void *)this << "release voices";
         erase_defaultbyid();
-        current_id_.clear();
+        current_id_.clear_nb();
         release_voices(d.time());
     }
 
@@ -1164,6 +1168,8 @@ void correlator_default_t::release_voices(unsigned long long time)
 void correlator_default_t::shutdown_fast()
 {
     correlator_source_t::shutdown_fast();
+    erase_defaultbyid();
+    current_id_.clear_nb();
     release_voices(piw::tsd_time());
 }
 
@@ -1179,7 +1185,6 @@ int correlator_default_t::__erase(void *self_, void *)
 {
     correlator_default_t *self = (correlator_default_t *)self_;
     self->root_->defaults_[self->signal_].erase(iid_t(self->iid_,self->path_,self->priority_));
-    self->erase_defaultbyid();
     return 0;
 }
 
@@ -1268,13 +1273,12 @@ void piw::correlator_t::impl_t::trash_voices()
 
 piw::correlator_t::impl_t::~impl_t()
 {
-    trash_inputs();
-    trash_voices();
-
     tracked_invalidate();
     tick_disable();
     close_sink();
     close_thing();
+    trash_inputs();
+    trash_voices();
 }
 
 void piw::correlator_t::impl_t::enable_ticking()

@@ -52,7 +52,7 @@ namespace
 {
     File getPluginsDir()
     {
-        return File(pic::global_library_dir().c_str()).getChildFile("Plugins");
+        return ejuce::pathToFile(pic::global_library_dir()).getChildFile("Plugins");
     }
 
     class EigenScanPrgComponent: public JucerScanPrgComponent
@@ -345,14 +345,14 @@ namespace
                 juce::File f(getPluginsDir().getChildFile(T("plugins_cache")));
 
                 std::auto_ptr<juce::XmlElement> el(plugin_list_.createXml());
-                //printf("writing %s as %d...\n",f.getFullPathName().toCString(),geteuid());
-                if(!el->writeToFile(f,juce::String::empty)) printf("oops, failed!\n");
-                //printf("done.\n");
+                std::cout << "writing " << f.getFullPathName() << std::endl;
+                if(!el->writeToFile(f,juce::String::empty)) std::cout << "oops, failed!" << std::cout;
+                std::cout << "done." << std::endl;
 
                 juce::File b(getPluginsDir().getChildFile(T("bad_plugins")));
-                //printf("writing %s as %d...\n",b.getFullPathName().toCString(),geteuid());
-                if(!b.replaceWithText (bad_plugins_.joinIntoString ("\n"), true, true)) printf("oops, failed!\n");
-                //printf("done.\n");
+                std::cout << "writing " << b.getFullPathName() << std::endl;
+                if(!b.replaceWithText (bad_plugins_.joinIntoString ("\n"), true, true)) std::cout << "oops, failed!" << std::cout;
+                std::cout << "done." << std::endl;
             }
 
             KnownPluginList &getPluginList() { return plugin_list_; }
@@ -377,7 +377,7 @@ namespace
             StringArray skip_;
             bool fullscan_;
             FileSearchPath path_;
-            
+
             JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(EigenScanPrgWindow);
     };
 
@@ -688,6 +688,7 @@ class EigenScanner : public juce::JUCEApplication
         void initialise (const String& commandLine)
         {
             pic::to_front();
+            pic::disable_powersaving();
             LookAndFeel::setDefaultLookAndFeel(new ejuce::EJuceLookandFeel);
 
             manager_ = AudioPluginFormatManager::getInstance();

@@ -36,7 +36,7 @@ namespace midi
 
     typedef pic::functor_t<void(const piw::data_nb_t&)> resend_current_t;
 
-    struct MIDILIB_DECLSPEC_CLASS midi_from_belcanto_t
+    struct MIDILIB_DECLSPEC_CLASS midi_from_belcanto_t: public virtual pic::tracked_t
     {
         midi_from_belcanto_t(const piw::cookie_t &, piw::clockdomain_ctl_t *);
         ~midi_from_belcanto_t();
@@ -59,7 +59,13 @@ namespace midi
         void set_send_notes(bool);
         void set_send_pitchbend(bool);
         void set_send_hires_velocity(bool);
+        void set_pitchbend_up(float semis);
+        void set_pitchbend_down(float semis);
         unsigned get_active_midi_channel(const piw::data_nb_t &);
+        void set_velocity_samples(unsigned);
+        void set_velocity_curve(float);
+        void set_velocity_scale(float);
+        piw::clocksink_t *clocksink();
 
         class impl_t;
     private:

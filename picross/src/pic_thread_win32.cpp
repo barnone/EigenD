@@ -23,7 +23,7 @@
 #include <picross/pic_log.h>
 #include <picross/pic_time.h>
 #include <picross/pic_fastalloc.h>
-
+#include <picross/pic_resources.h>
 #include <picross/pic_config.h>
 
 #include <math.h>
@@ -38,14 +38,19 @@
 
 #define _VALUE_MAX ((int) ((~0u) >> 1))
 
-void pic_thread_yield()
+void pic_thread_yield(void)
 {
     Sleep(0);
 }
 
-void pic_set_fpu()
+void pic_set_fpu(void)
 {
     _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
+}
+
+void pic_init_dll_path(void)
+{
+   SetDllDirectoryA(pic::private_exe_dir().c_str());
 }
 
 void pic_set_foreground(bool rt)
@@ -59,7 +64,7 @@ void pic_set_foreground(bool rt)
     }
 }
 
-pic_threadid_t pic_current_threadid()
+pic_threadid_t pic_current_threadid(void)
 {
     return GetCurrentThreadId();
 }
@@ -76,7 +81,7 @@ static int __lock_stack()
     return 1;
 }
 
-static int __realtime(unsigned pri)
+static int __realtime(int pri)
 {
     unsigned pri2 = THREAD_PRIORITY_NORMAL;
 
@@ -256,7 +261,7 @@ void pic_set_core_unlimited()
 
 pic::tsd_t pic::thread_t::genctx__;
 
-pic::thread_t::thread_t(unsigned realtime)
+pic::thread_t::thread_t(int realtime)
 {
     realtime_=realtime;
     run_gate_.open();
@@ -490,7 +495,7 @@ bool pic::gate_t::isopen()
     return f_!=0;
 }
 
-pic::mutex_t::mutex_t(bool recursive) { InitializeCriticalSection(&data_); }
+pic::mutex_t::mutex_t(bool recursive,bool inheritance) { InitializeCriticalSection(&data_); }
 pic::mutex_t::~mutex_t() { DeleteCriticalSection(&data_); }
 void pic::mutex_t::lock() { EnterCriticalSection(&data_); }
 void pic::mutex_t::unlock() { LeaveCriticalSection(&data_); }

@@ -20,11 +20,11 @@
 
 from pi import atom,domain,node,utils
 from pibelcanto import lexicon
+from . import language_native
 import piw
-import language_native
 
 class History(node.Server):
-    history = 10
+    history = 50
 
     def __init__(self,callback):
         node.Server.__init__(self,rtransient=True)

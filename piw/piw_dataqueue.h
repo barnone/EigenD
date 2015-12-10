@@ -38,16 +38,17 @@ namespace piw
             dataqueue_t(): queue_(0) {}
             dataqueue_t(const dataqueue_t &q): queue_(q.queue_) { piw_dataqueue_incref(queue_); }
             dataqueue_t &operator=(const dataqueue_t &q) { if(queue_!=q.queue_) { clear(); queue_=q.queue_; piw_dataqueue_incref(queue_); } return *this; }
-            ~dataqueue_t() { clear(); }
+            ~dataqueue_t();
 
             bct_dataqueue_t lend() const { return queue_; }
             bct_dataqueue_t give() const { piw_dataqueue_incref(queue_); return queue_; }
-            void clear() { piw_dataqueue_decref(queue_); queue_=0; };
+            void clear();
             bool isvalid() const { return queue_!=0; }
 
             void write_slow(const piw::data_base_t &d);
             void write_fast(const piw::data_nb_t &d);
             void trigger_slow();
+            void clear_fast();
 
             // read next value, up to and including t
             bool read(piw::data_nb_t &d,unsigned long long *i,unsigned long long t) const;

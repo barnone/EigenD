@@ -24,35 +24,10 @@
 #include <picross/pic_fastalloc.h>
 #include <picross/pic_ref.h>
 
-#define MAX_COURSES 10
+#define MAX_COLUMNS 10
 
 namespace
 {
-    static inline int c2int(unsigned char *c)
-    {
-        unsigned long cx = (c[0]<<8) | (c[1]);
-
-        if(cx>0x7fff)
-        {
-            return ((long)cx)-0x10000;
-        }
-
-        return cx;
-    }
-
-    static inline int rc2k(int r, int c, int nc, const unsigned *co, const unsigned *cl)
-    {
-        int tc = co[nc-1]+cl[nc-1];
-
-        if(r==0 && c==0) return -1;
-        if(r==0 && c<=tc) return c-1;
-        if(r<0) r=nc+r+1;
-        if(r<1 || r>nc) return -1;
-        if(c<0) c=cl[r-1]+c+1;
-        if(c<1 || c>(int)cl[r-1]) return -1;
-        return co[r-1]+c-1;
-    }
-
     static inline int status2color(unsigned status)
     {
         unsigned color=0;
@@ -104,14 +79,14 @@ namespace
 
 struct piw::statusledconvertor_t::impl_t: virtual pic::tracked_t, virtual pic::lckobject_t
 {
-    impl_t(unsigned num_courses, const unsigned *course_len): num_courses_(num_courses), course_len_(course_len)
+    impl_t(unsigned num_columns, const unsigned *column_len): num_columns_(num_columns), column_len_(column_len)
     {
         num_keys_ = 0;
 
-        for(unsigned i=0;i<num_courses_;i++)
+        for(unsigned i=0;i<num_columns_;i++)
         {
-            course_offset_[i] = num_keys_;
-            num_keys_ += course_len_[i];
+            column_offset_[i] = num_keys_;
+            num_keys_ += column_len_[i];
         }
 
         current_colors_ = (unsigned char *)pic::nb_malloc(PIC_ALLOC_LCK,num_keys_);
@@ -137,6 +112,39 @@ struct piw::statusledconvertor_t::impl_t: virtual pic::tracked_t, virtual pic::l
         }
     }
 
+    inline int xy2k(const piw::statusdata_t &d)
+    {
+        if(d.musical_)
+        {
+            if(d.coordinate_.x_!=1) return -1;
+            if(d.coordinate_.y_>(int)num_keys_) return -1;
+            
+            if(d.coordinate_.endrel_y_) return num_keys_-d.coordinate_.y_;
+            else return d.coordinate_.y_-1;
+        }
+        else
+        {
+            int absx = d.coordinate_.x_;
+            int absy = d.coordinate_.y_;
+
+            int xlen = num_columns_;
+            if(d.coordinate_.endrel_x_)
+            {
+                absx = xlen-absx+1;
+            }
+            if(absx<1 || absx>xlen) return -1;
+
+            int ylen = column_len_[absx-1];
+            if(d.coordinate_.endrel_y_)
+            {
+                absy = ylen-absy+1;
+            }
+            if(absy<1 || absy>ylen) return -1;
+
+            return column_offset_[absx-1]+absy-1;
+        }
+    }
+
     void update_leds(piw::data_nb_t &data, void *kbd, void (*func_set_led)(void*, unsigned, unsigned))
     {
         if(!data.is_blob()) return;
@@ -146,15 +154,14 @@ struct piw::statusledconvertor_t::impl_t: virtual pic::tracked_t, virtual pic::l
         unsigned char* rs = ((unsigned char*)data.as_blob());
         unsigned rl = data.as_bloblen();
 
-        while(rl>=5)
+        while(rl>=6)
         {
-            int kr = c2int(&rs[0]);
-            int kc = c2int(&rs[2]);
-            unsigned kv = rs[4]&0x7f;
+            piw::statusdata_t status = piw::statusdata_t::from_bytes(rs);
 
+            unsigned char kv = status.status_;
             if(kv!=BCTSTATUS_OFF)
             {
-                int kn = rc2k(kr,kc,num_courses_,course_offset_,course_len_);
+                int kn = xy2k(status);
 
                 if(kn>=0)
                 {
@@ -172,8 +179,8 @@ struct piw::statusledconvertor_t::impl_t: virtual pic::tracked_t, virtual pic::l
                 }
             }
 
-            rs+=5;
-            rl-=5;
+            rs+=6;
+            rl-=6;
         }
 
         for(unsigned i=0;i<num_keys_;i++)
@@ -189,15 +196,17 @@ struct piw::statusledconvertor_t::impl_t: virtual pic::tracked_t, virtual pic::l
     }
 
     unsigned num_keys_;
-    unsigned num_courses_;
-    unsigned course_offset_[MAX_COURSES];
-    const unsigned *course_len_;
+
+    unsigned num_columns_;
+    unsigned column_offset_[MAX_COLUMNS];
+    const unsigned *column_len_;
+
     bool initialized_;
     unsigned char *current_colors_;
     unsigned char *next_status_;
 };
 
-piw::statusledconvertor_t::statusledconvertor_t(unsigned num_courses, const unsigned *course_len): root_(new impl_t(num_courses,course_len))
+piw::statusledconvertor_t::statusledconvertor_t(unsigned num_columns, const unsigned *column_len): root_(new impl_t(num_columns,column_len))
 {
 }
 

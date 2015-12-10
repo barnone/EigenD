@@ -32,15 +32,15 @@
 #include <piw/piw_panner.h>
 #include <piw/piw_velocitydetect.h>
 #include <piw/piw_scroller.h>
-#include <piw/piw_scroller2.h>
 #include <piw/piw_scheduler.h>
 #include <piw/piw_controller.h>
+#include <piw/piw_controller2.h>
 #include <piw/piw_backend.h>
 #include <piw/piw_sample.h>
 #include <piw/piw_sampler.h>
 #include <piw/piw_rpc.h>
 #include <piw/piw_scaler.h>
-#include <piw/piw_kgroup.h>
+#include <piw/piw_keygroup.h>
 #include <piw/piw_talker.h>
 #include <piw/piw_correlator.h>
 #include <piw/piw_connector.h>
@@ -57,12 +57,12 @@
 #include <piw/piw_window.h>
 #include <piw/piw_status.h>
 #include <piw/piw_controllerdict.h>
-#include <piw/piw_strummer.h>
+#include <piw/piw_keys.h>
 >>>
 
 from picross_native[picross/picross.pip] import notify, f_string, f2f, status
 
-class event[piw::event_t]: controlled /gc/
+class event[piw::event_t]: controlled2 /gc/
 {
     event(scheduler *, bool, const change &)
 
@@ -142,18 +142,6 @@ class clockref[bct_clocksink_t]
 {
 }
 
-class strummer[piw::strummer_t]
-{
-    strummer(const cookie &, clockdomain_ctl *)
-    cookie data_cookie()
-    cookie ctl_cookie()
-    void enable(bool)
-    void set_key_mix(float)
-    void set_on_threshold(float)
-    void set_off_threshold(float)
-    void set_trigger_window(unsigned)
-}
-
 class stringer[piw::stringer_t]
 {
     stringer(const cookie &)
@@ -188,14 +176,14 @@ d2d_nb signal_cnc_filter[piw::signal_cnc_filter](unsigned,unsigned)
 d2d_nb aggregation_filter[piw::aggregation_filter](unsigned)
 d2d_nb aggregation_filter3[piw::aggregation_filter3](unsigned,unsigned,unsigned)
 d2d_nb deaggregation_filter[piw::deaggregation_filter](unsigned)
-d2d_nb grist_aggregation_filter[piw::grist_aggregation_filter](unsigned)
-d2d_nb gristchaff_aggregation_filter[piw::gristchaff_aggregation_filter](unsigned,unsigned)
-d2d_nb grist_deaggregation_filter[piw::grist_deaggregation_filter](unsigned)
-d2d_nb grist_deaggregation_filter2[piw::grist_deaggregation_filter2](unsigned,unsigned)
+d2d_nb event_aggregation_filter[piw::event_aggregation_filter](unsigned)
+d2d_nb eventchannel_aggregation_filter[piw::eventchannel_aggregation_filter](unsigned,unsigned)
+d2d_nb event_deaggregation_filter[piw::event_deaggregation_filter](unsigned)
+d2d_nb event_deaggregation_filter2[piw::event_deaggregation_filter2](unsigned,unsigned)
 d2d_nb last_gt_filter[piw::last_gt_filter](unsigned)
 d2d_nb last_lt_filter[piw::last_lt_filter](unsigned)
 d2d_nb last_filter[piw::last_filter]()
-d2d_nb grist_filter[piw::grist_filter]()
+d2d_nb event_filter[piw::event_filter]()
 
 d2d_nb dict_merger[piw::dict_merger](const data &)
 
@@ -253,16 +241,29 @@ class correlator[piw::correlator_t] /gc/
 
 class backend[piw::backend_t]
 {
-    backend(correlator *, unsigned, unsigned, int, unsigned,bool)
+    backend(correlator *, unsigned, unsigned, int, unsigned)
     virtual converter_ref create_converter(bool) = 0
-    void set_clocked(bool)
     void set_latency(unsigned)
     void remove_latency()
 }
 
+class backend_delegate[piw::backend_delegate_t]
+{
+    backend_delegate(bool)
+    virtual backend *create_controller_backend() = 0
+    virtual backend *create_data_backend() = 0
+    backend *get_controller_backend()
+    backend *get_data_backend()
+    void set_clock_source(client *)
+    void set_clocked(bool)
+    void set_latency(unsigned)
+    void clear()
+    bool isclocked()
+}
+
 class connector[piw::connector_t]: client /gc/
 {
-    connector(bool, backend *,backend *, const d2d_nb &, bool);
+    connector(bool, backend_delegate *, const d2d_nb &, bool);
     void client_opened()
     void client_clock()
     void close_client()
@@ -300,6 +301,47 @@ class functor_backend[piw::functor_backend_t] /gc/
     void send_duplicates(bool)
 }
 
+class coordinate[piw::coordinate_t]
+{
+   coordinate(int, int)
+   coordinate(int, int, bool, bool)
+
+   data make_data(unsigned long long)
+   bool is_valid()
+   bool equals(int, int, const data &)
+}
+
+class controller2[piw::controller2_t]
+{
+    controller2(const cookie &,const stdstr &)
+    cookie event_cookie()
+    cookie controller_cookie()
+    cookie converter_cookie()
+    virtual void controller_clock(clockref *)
+    virtual void controller_latency(unsigned)
+}
+
+class controlled_base2[piw::controlled_base2_t]
+{
+    xcontrolled()
+    void attach(controller2 *)
+    bool attach_to(controller2 *,unsigned)
+    void detach()
+    int ordinal()
+    fastdata *fastdata()
+    void set_key(const coordinate &)
+    void set_sequential_key(int)
+    void set_light(unsigned,unsigned)
+    void set_self_light(unsigned)
+}
+
+class controlled2[piw::controlled2_t]: controlled_base2
+{
+    controlled(bool)
+    void enable()
+    void disable()
+}
+
 class controller[piw::controller_t]
 {
     controller(const cookie &,const stdstr &)
@@ -316,7 +358,7 @@ class xxcontrolled[piw::xxcontrolled_t]
     void detach()
     int ordinal()
     fastdata *fastdata()
-    void set_key(const data &)
+    void set_key(const coordinate &)
 }
 
 class controlled[piw::controlled_t]: xxcontrolled
@@ -328,7 +370,7 @@ class controlled[piw::controlled_t]: xxcontrolled
     void enable()
     void disable()
     int ordinal()
-    void set_key(const data &)
+    void set_key(const coordinate &)
 }
 
 class fasttrigger[piw::fasttrigger_t]: xxcontrolled
@@ -340,7 +382,7 @@ class fasttrigger[piw::fasttrigger_t]: xxcontrolled
     void ping()
     int ordinal()
     change trigger()
-    void set_key(const data &)
+    void set_key(const coordinate &)
 }
 
 class cookie[piw::cookie_t]
@@ -474,23 +516,25 @@ class lightconvertor[piw::lightconvertor_t]
 {
     lightconvertor(bool, const cookie &)
     cookie cookie()
-    void set_status_handler(unsigned, int, int, change)
+    void set_status_handler(unsigned, const coordinate &, change)
     void remove_status_handler(unsigned)
-    unsigned char get_status(int,int)
+    unsigned char get_status(const coordinate &)
     void set_default_color(unsigned,unsigned);
 }
 
 class statusbuffer[piw::statusbuffer_t] /gc/
 {
+    statusbuffer(const cookie &)
     statusbuffer(const change_nb &, unsigned, const cookie &)
     void send()
     void override(bool)
     void autosend(bool)
     void clear()
-    void set_status(bool,int,int,unsigned char)
-    unsigned char get_status(bool,int,int)
+    void clear_status(bool,const coordinate &)
+    void set_status(bool,const coordinate &,unsigned char)
+    unsigned char get_status(bool,const coordinate &)
     void set_blink_time(float)
-    void set_blink_size(unsigned)
+    void set_blink_geometry(const data &)
     change_nb enabler()
     void enable(unsigned)
     change_nb blinker()
@@ -512,8 +556,8 @@ class lightsource[piw::lightsource_t] /gc/
 class statusmixer[piw::statusmixer_t]
 {
     statusmixer(const cookie &)
-    void autoupdate(bool);
-    void update();
+    void autoupdate(bool)
+    void update()
     cookie cookie()
 }
 
@@ -530,25 +574,35 @@ class controllerdict[piw::controllerdict_t]
 
 d2d_nb d2d_const[piw::d2d_const](const data &)
 
-class talker_mapper[piw::talker_mapper_t]
+bool is_key[piw::is_key](const data &)
+unsigned key_sequential[piw::key_sequential](const data &, int, int, bool, bool)
+
+class modekey_handler[piw::modekey_handler_t]
 {
-    talker_mapper()
-    d2d_nb key_filter()
-    void set_mapping(unsigned, unsigned)
+    modekey_handler()
+
+    d2b_nb key_filter()
+    void set_modekey(const coordinate &)
+    void set_upstream_columnlength(const data &)
 }
 
-class kgroup_mapper[piw::kgroup_mapper_t]
+class keygroup_mapper[piw::keygroup_mapper_t]
 {
-    kgroup_mapper()
+    keygroup_mapper()
+
     d2d_nb key_filter()
     d2d_nb light_filter()
+
     void clear_mapping()
     void activate_mapping()
-    void set_mapping(unsigned, unsigned)
-    void set_upstream_rowlen(data)
-    void set_rowlen(data)
-    void set_rowoffset(data)
-    void set_courselen(data)
+
+    void clear_physical_mapping()
+    void set_physical_mapping(int,int,int,int,int,int,int,int)
+    void activate_physical_mapping()
+
+    void clear_musical_mapping()
+    void set_musical_mapping(int,int,int,int,int,int,int,int)
+    void activate_musical_mapping()
 }
 
 class sclone[piw::sclone_t] /gc/
@@ -631,6 +685,7 @@ class scroller[piw::scroller_t]
     void enable()
     void disable()
     void set_scheme(unsigned)
+    void set_key(const coordinate &);
 }
 
 class scroller2[piw::scroller2_t]
@@ -639,6 +694,7 @@ class scroller2[piw::scroller2_t]
     cookie cookie()
     void enable()
     void disable()
+    void set_key(const coordinate &);
 }
 
 class splitter_node[piw::splitter_node_t]: server
@@ -715,20 +771,6 @@ class d2b_nb[piw::d2b_nb_t] /gc/
         """
     bool __call__[invoke](const data_nb &)
 }
-
-<<<
-static PyObject *piw_make_d2b_nb_functor(PyObject *args);
->>>
-
-inline make_d2b_nb_functor(args)
-    """
-    make_d2b_nb_functor(callable) -> new d2b_nb functor
-    
-    Make d2b_nb functor from python callable
-    """
-<<<
-   return piw_make_d2b_nb_functor(args);
->>>
 
 class d2d[piw::d2d_t] /gc/
     """
@@ -1884,7 +1926,7 @@ class selector[piw::selector_t] /gc/
     selector(const cookie &, const change_nb &, const change_nb &, unsigned, bool)
 
     void gate_output(unsigned, const change_nb &, const change_nb &)
-    void gate_status_index(unsigned, unsigned)
+    void gate_status_coordinate(unsigned, const coordinate &)
     change_nb gate_input(unsigned)
     change_nb mode_input()
     void clear_output(unsigned)
@@ -1904,13 +1946,13 @@ class velocitydetect[piw::velocitydetect_t]
 
 class scaler_controller[piw::scaler_controller_t]
 {
-    scaler_controller()
+    scaler_controller(const cookie &)
     cookie cookie()
 }
 
 class scaler[piw::scaler_t] /gc/
 {
-    scaler(scaler_controller *,const cookie &,const cookie &,const f2f &)
+    scaler(scaler_controller *,const cookie &,const f2f &)
     cookie cookie()
     void set_bend_curve(const f2f &);
 }
@@ -2569,44 +2611,6 @@ struct piw_d2b_nb_sink_t: public piw::d2b_nb_t::sinktype_t
     PyInterpreterState *_interp;
     PyObject *_callable;
 };
-
-PyObject *piw_make_d2b_nb_functor(PyObject *args)
-{
-    PyObject *o;
-
-    PyEval_InitThreads();
-
-    if(!PyArg_ParseTuple(args,"O",&o))
-    {
-        return 0;
-    }
-
-    if(!PyCallable_Check(o))
-    {
-        PyErr_SetString(PyExc_TypeError,"can't make d2b functor from non callable");
-        return 0;
-    }
-
-    Py_INCREF(o);
-
-    piw::d2b_nb_t *c = 0;
-
-    try
-    {
-        PyInterpreterState *interp = PyThreadState_Get()->interp;
-        {   unlock_p2c unlock;
-            c = new piw::d2b_nb_t(pic::ref(new piw_d2b_nb_sink_t(interp,o)));
-        }
-    }
-    catch(...)
-    {
-        PyErr_SetString(PyExc_RuntimeError,"unknown c++ exception creating functor");
-        Py_DECREF(o);
-        return 0;
-    }
-
-    return d2b_nb_wrap_(c,true);
-}
 
 struct piw_dd2d_sink_t: public piw::dd2d_t::sinktype_t
 {

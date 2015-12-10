@@ -19,8 +19,12 @@
 
 #ifndef __PIW_SCROLLER__
 #define __PIW_SCROLLER__
+
+#include <picross/pic_functor.h>
 #include "piw_exports.h"
 #include "piw_bundle.h"
+#include "piw_data.h"
+#include "piw_keys.h"
 
 namespace piw
 {
@@ -45,9 +49,26 @@ namespace piw
             void set_scheme(unsigned);
             void disable();
             void enable();
+            void set_key(const piw::coordinate_t &);
         private:
             impl_t *impl_;
     };
+
+    class PIW_DECLSPEC_CLASS scroller2_t
+    {
+        public:
+            class impl_t;
+        public:
+            scroller2_t(const piw::change_t &);
+            ~scroller2_t();
+            cookie_t cookie();
+            void disable();
+            void enable();
+            void set_key(const piw::coordinate_t &);
+        private:
+            impl_t *impl_;
+    };
+
 };
 
 #endif

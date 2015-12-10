@@ -19,10 +19,8 @@
 #
 
 import piw
-import loop_native
 from pi import agent,atom,domain,errors,action,bundles,async,utils,resource,logic,node,upgrade,const,paths,collection
-from plg_loop import drummer_version as version
-from plg_loop import loopdb
+from . import drummer_version as version,loopdb,loop_native
 
 from pi.logic.shortcuts import T
 import sys
@@ -79,9 +77,9 @@ class Voice(atom.Atom):
 
         self.agent.lights.set_status(self.voice,const.status_inactive)
 
-        self[1] = atom.Atom(domain=domain.BoundedFloat(0.0,100.0,0.0,hints=(T('inc',1),T('biginc',10),T('control','updown')),verbinc=10.0),init=100.0,policy=atom.default_policy(self.set_volume),names='volume')
-        self[2] = atom.Atom(domain=domain.BoundedFloat(0.0,100.0,0.0,hints=(T('inc',1),T('biginc',10),T('control','updown')),verbinc=10.0),init=10.0,policy=atom.default_policy(self.set_chop),names='chop')
-        self[3] = atom.Atom(domain=domain.Bool(),init=True,names='enable',policy=atom.default_policy(self.set_playing),protocols='set',container=(None,'voice%d'%voice,agent.verb_container()))
+        self[1] = atom.Atom(domain=domain.BoundedFloat(0.0,100.0,0.0,hints=(T('stageinc',1),T('inc',1),T('biginc',10),T('control','updown')),verbinc=10.0),init=100.0,policy=atom.default_policy(self.set_volume),names='volume')
+        self[2] = atom.Atom(domain=domain.BoundedFloat(0.0,100.0,0.0,hints=(T('stageinc',1),T('inc',1),T('biginc',10),T('control','updown')),verbinc=10.0),init=10.0,policy=atom.default_policy(self.set_chop),names='chop')
+        self[3] = atom.Atom(domain=domain.Bool(),init=False,names='enable',policy=atom.default_policy(self.set_playing),protocols='set',container=(None,'voice%d'%voice,agent.verb_container()))
 
         self[3].add_verb2(1,'set([],~a,role(None,[instance(~self)]))', create_action=self.__enable_set, status_action=self.__enable_status)
         self[3].add_verb2(2,'set([un],~a,role(None,[instance(~self)]))', create_action=self.__enable_unset, status_action=self.__enable_status)
@@ -166,7 +164,8 @@ class Voice(atom.Atom):
         if not filename:
             return None
 
-        return self.agent.loopdb.idforfile(filename)
+        filename,fileid = self.agent.loopdb.idforfile(filename)
+        return fileid
 
     def set_current_id(self,lid):
         if lid is not None:
@@ -178,7 +177,7 @@ class Voice(atom.Atom):
         fileid = None
 
         if filename:
-            fileid = self.agent.loopdb.idforfile(filename)
+            filename,fileid = self.agent.loopdb.idforfile(filename)
 
         print 'set loop',filename,fileid
 
@@ -272,7 +271,7 @@ class VoiceList(collection.Collection):
         self.__agent = agent
         self.__timestamp = piw.tsd_time()
 
-        collection.Collection.__init__(self,names='voice list',protocols='browse',creator=self.__create_voice,wrecker=self.__wreck_voice,inst_creator=self.__create_inst,inst_wrecker=self.__wreck_inst)
+        collection.Collection.__init__(self,names='voice list',protocols='oldbrowse',creator=self.__create_voice,wrecker=self.__wreck_voice,inst_creator=self.__create_inst,inst_wrecker=self.__wreck_inst)
         self.update()
 
     def rpc_displayname(self,arg):
@@ -354,7 +353,7 @@ class VoiceList(collection.Collection):
 class Agent(agent.Agent):
     def __init__(self, address, ordinal):
         self.domain = piw.clockdomain_ctl()
-        agent.Agent.__init__(self, signature=version,names='drummer',container=(4,'drummer',atom.VerbContainer(clock_domain=self.domain)),protocols='browse',ordinal=ordinal)
+        agent.Agent.__init__(self, signature=version,names='drummer',container=(4,'drummer',atom.VerbContainer(clock_domain=self.domain)),protocols='oldbrowse',ordinal=ordinal)
 
         self.updater = Updater()
         self.loopdb = loopdb.LoopDatabase()

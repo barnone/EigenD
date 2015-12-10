@@ -21,29 +21,57 @@
 #define __PIW_STATUS__
 #include "piw_exports.h"
 #include "piw_bundle.h"
+#include "piw_keys.h"
 
 namespace piw
 {
+    struct PIW_DECLSPEC_CLASS statusdata_t
+    {
+        statusdata_t(bool, const piw::coordinate_t &, unsigned char);
+
+        static statusdata_t from_bytes(unsigned char *);
+        void to_bytes(unsigned char *) const;
+
+        bool operator==(const statusdata_t &) const;
+        bool operator<(const statusdata_t &) const;
+        bool operator>(const statusdata_t &) const;
+
+        const bool musical_;
+        const piw::coordinate_t coordinate_;
+        const unsigned char status_;
+
+        private:
+
+            static inline void int2c(int, unsigned char *);
+            static inline int c2int(unsigned char *);
+    };
+
+    typedef pic::lckset_t<piw::statusdata_t>::nbtype statusset_t;
+
     class PIW_DECLSPEC_CLASS statusbuffer_t
     {
         public:
             class impl_t;
         public:
-            statusbuffer_t(const piw::change_nb_t &, unsigned, const cookie_t &);
+            statusbuffer_t(const piw::change_nb_t &, unsigned, const piw::cookie_t &);
+            statusbuffer_t(const piw::cookie_t &);
             ~statusbuffer_t();
             void send();
             void override(bool);
             void autosend(bool);
             void clear();
-            void set_status(bool,int,int,unsigned char);
-            unsigned char get_status(bool,int,int);
+            void clear_status(bool, const piw::coordinate_t &);
+            void set_status(bool, const piw::coordinate_t &, unsigned char);
+            unsigned char get_status(bool, const piw::coordinate_t &);
             void set_blink_time(float);
-            void set_blink_size(unsigned);
+            void set_blink_geometry(const piw::data_t &);
             piw::change_nb_t enabler();
             void enable(unsigned);
             piw::change_nb_t blinker();
             int gc_traverse(void *, void *) const;
             int gc_clear();
+       public:
+            static piw::data_nb_t make_statusbuffer(const statusset_t &);
        private:
             impl_t *root_;
     };
@@ -53,7 +81,7 @@ namespace piw
         public:
             class impl_t;
         public:
-            statusmixer_t(const cookie_t &);
+            statusmixer_t(const piw::cookie_t &);
             ~statusmixer_t();
             void autoupdate(bool);
             void update();
@@ -67,12 +95,14 @@ namespace piw
         public:
             class impl_t;
         public:
-            statusledconvertor_t(unsigned nc, const unsigned *cs);
+            statusledconvertor_t(unsigned, const unsigned *);
             ~statusledconvertor_t();
             void update_leds(piw::data_nb_t &status_data, void *kbd, void (*func_set_led)(void *self, unsigned key, unsigned color));
         private:
             impl_t *root_;
     };
 };
+
+PIW_DECLSPEC_FUNC(std::ostream) &operator<<(std::ostream &o, const piw::statusdata_t &d);
 
 #endif

@@ -20,10 +20,13 @@
 
 #include <piw/piw_bundle.h>
 #include <piw/piw_clock.h>
+#include <piw/piw_data.h>
 #include <piw/piw_address.h>
 #include <piw/piw_tsd.h>
 #include <map>
 #include <sstream>
+
+using namespace piw;
 
 namespace
 {
@@ -482,7 +485,7 @@ void piw::evtsource_data_t::event_ended(unsigned seq) // fast
 
         if(lingering_count_==0)
         {
-            event_.clear();
+            event_.clear_nb();
             seq_current_=0;
             buffer_ = xevent_data_buffer_t();
 
@@ -527,7 +530,7 @@ bool piw::evtsource_data_t::event_end(unsigned long long t) // fast
 
     if(lingering_count_==0)
     {
-        event_.clear();
+        event_.clear_nb();
         seq_current_=0;
         return true;
     }
@@ -727,6 +730,13 @@ void decoder_wire_t::wire_closed()
 
 piw::event_data_source_real_t::event_data_source_real_t(const piw::data_t &path) : list_(pic::ref(new evtsource_data_t(this,path)))
 {
+}
+
+piw::event_data_source_real_t::~event_data_source_real_t()
+{
+    unsigned long long t = piw::tsd_time();
+    tsd_fastcall(end__,this,(void*)&t);
+    source_shutdown();
 }
 
 piw::evtsource_data_t::evtsource_data_t(event_data_source_real_t *src, const piw::data_t &path): source_(src), path_(path), seq_internal_(1), seq_current_(0), lingering_count_(0)

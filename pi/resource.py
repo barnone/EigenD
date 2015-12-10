@@ -58,22 +58,101 @@ def is_linux():
 def is_windows():
     return picross.is_windows()
 
-setup_dir='setups'
+# convert to multi-byte string if needed
+def MB(string):
+    if is_windows() and string is not None and isinstance(string,unicode):
+        return string.encode('utf_8')
+    return string
+
+# convert to wide character string if needed
+def WC(string):
+    if is_windows() and string is not None and isinstance(string,str):
+        return string.decode('utf_8')
+    return string
+
+def safe_walk(rd):
+    if rd and os_path_isdir(rd):
+        for (a,b,c) in os.walk(WC(rd)):
+            a = MB(a)
+            b = map(MB,b)
+            c = map(MB,c)
+            yield (a,b,c)
+
+def os_listdir(name):
+    result = os.listdir(WC(name))
+    return map(MB,result)
+
+def os_mkdir(name):
+    return os.mkdir(WC(name))
+
+def os_makedirs(name):
+    return os.makedirs(WC(name))
+
+def os_unlink(name):
+    return os.unlink(WC(name))
+
+def os_rename(name1,name2):
+    return os.rename(WC(name1),WC(name2))
+
+def os_path_exists(path):
+    return os.path.exists(WC(path))
+
+def os_path_getsize(path):
+    return os.path.getsize(WC(path))
+
+def os_path_isdir(path):
+    return os.path.isdir(WC(path))
+
+def os_path_isfile(path):
+    return os.path.isfile(WC(path))
+
+def os_path_getmtime(path):
+    return os.path.getmtime(WC(path))
+
+def glob_glob(pattern):
+    result = glob.glob(WC(pattern))
+    return map(MB,result)
+
+def os_remove(name):
+    return os.remove(WC(name))
+
+def file_open(name,mode='r',buff=-1):
+    return open(WC(name),mode,buff)
+
+def file_file(name,mode='r',buff=-1):
+    return file(WC(name),mode,buff)
+
+def shutil_copyfile(src,dst):
+    shutil.copyfile(WC(src),WC(dst))
+
+bugs_dir='Bugs'
+global_dir='Global'
+help_dir='Help'
+impulseresponse_dir='ImpulseResponse'
+instrument_dir='Instruments'
+lock_dir='Lock'
+log_dir='Log'
+loop_dir='Loop'
+plugins_dir='Plugins'
+recordings_dir='Recordings'
+recordingstmp_dir='Recordings-tmp'
+scalemanager_dir='Scale Manager'
+scripts_dir='Scripts'
+setup_dir='Setups'
 default_setup='default_setup'
 current_setup='current_setup'
 user_details='user_details'
-instrument_dir='instruments'
 
 def __mkdir(name):
-    if not os.path.exists(name):
-        os.mkdir(name)
-    if not os.path.isdir(name):
+    if not os_path_exists(name):
+        os_mkdir(name)
+    if not os_path_isdir(name):
         raise RuntimeError('%s is not a directory' % name)
 
 def lock_file(name):
     userdir_g = picross.global_library_dir()
     __mkdir(userdir_g)
-    lockdir_g = os.path.join(userdir_g,'lock')
+    lockdir_g = os.path.join(userdir_g,lock_dir)
     __mkdir(lockdir_g)
 
     return os.path.join(lockdir_g,name+'.lck')
@@ -82,7 +161,7 @@ def current_version():
     return picross.release()
 
 def cache_dir():
-    return os.path.join(get_home_dir(),'cache')
+    return os.path.join(get_home_dir(),'Cache')
 
 def get_home_dir(version=None):
     release = current_version() if version is None else version
@@ -101,12 +180,13 @@ def get_home_dir(version=None):
 def find_installed_versions(filter=None):
     userdir_g = picross.global_library_dir()
 
-    if not os.path.isdir(userdir_g):
+    if not os_path_isdir(userdir_g):
         return []
 
     ver = {}
-
-    for r in os.listdir(userdir_g):
+     
+    for r in os_listdir(WC(userdir_g)):
+        r = MB(r)
         v,t = split_version(r)
 
         if v is None:
@@ -116,7 +196,7 @@ def find_installed_versions(filter=None):
             continue
 
         p = os.path.join(userdir_g,r)
-        if os.path.isdir(p):
+        if os_path_isdir(p):
             ver[(v,t)]=r
 
     ver_keys = ver.keys()
@@ -128,7 +208,7 @@ def find_installed_versions(filter=None):
 def get_release_dir(category):
     res_root = picross.release_resource_dir()
     res_dir = os.path.join(res_root,category)
-    return res_dir if os.path.exists(res_dir) else None
+    return res_dir if os_path_exists(res_dir) else None
 
 def find_release_resource(category,name):
     reldir = get_release_dir(category)
@@ -138,7 +218,7 @@ def find_release_resource(category,name):
 
     filename = os.path.join(reldir,name)
 
-    if os.path.exists(filename):
+    if os_path_exists(filename):
         return filename
 
     return None
@@ -147,7 +227,7 @@ def find_resource(category,name,usercopy=False):
     userdir = user_resource_dir(category)
     user_filename = os.path.join(userdir,name)
 
-    if os.path.exists(user_filename):
+    if os_path_exists(user_filename):
         return user_filename
 
     rel_filename = find_release_resource(category,name)
@@ -156,7 +236,7 @@ def find_resource(category,name,usercopy=False):
         return None
 
     if usercopy:
-        shutil.copyfile(rel_filename,user_filename)
+        shutil_copyfile(rel_filename,user_filename)
         return user_filename
 
     return rel_filename
@@ -166,7 +246,7 @@ def list_user_resources(category,pattern):
     files = []
 
     if userdir:
-        files.extend(glob.glob(os.path.join(userdir,pattern)))
+        files.extend(glob_glob(os.path.join(userdir,pattern)))
 
     return files
 
@@ -176,9 +256,9 @@ def list_resources(category,pattern):
     files = []
 
     if userdir:
-        files.extend(glob.glob(os.path.join(userdir,pattern)))
+        files.extend(glob_glob(os.path.join(userdir,pattern)))
 
-    files.extend(glob.glob(os.path.join(reldir,pattern)))
+    files.extend(glob_glob(os.path.join(reldir,pattern)))
     return files
 
 def user_resource_dir(category,version=None):
@@ -190,8 +270,8 @@ def user_resource_dir(category,version=None):
 def new_resource_file(category,name,version=None):
     userdir = user_resource_dir(category,version=version)
     filename = os.path.join(userdir,name)
-    if os.path.exists(filename):
-        os.unlink(filename)
+    if os_path_exists(filename):
+        os_unlink(filename)
     return filename
 
 def user_resource_file(category,name,version=None):
@@ -199,20 +279,25 @@ def user_resource_file(category,name,version=None):
     filename = os.path.join(userdir,name)
     return filename
 
+def clean_current_setup():
+    def_state_file = user_resource_file(global_dir,current_setup)
+    for statefile in glob_glob(def_state_file+'*'):
+        os_unlink(statefile)
+
 class LockFile:
     def __init__(self,name):
-        print 'init lock file'      
+        print 'init lock file',name
         
         filename = lock_file(name)
-        self.__file = open(filename,'wb')
+        self.__file = file_open(filename,'wb')
             
     def __term__(self):
         self.__file.close()
 
     def unlock(self):
-        pass
         try:
             if is_windows():
+                pass
                 hfile = win32file._get_osfhandle(self.__file.fileno())
                 overlapped = pywintypes.OVERLAPPED()
                 win32file.UnlockFileEx(hfile, 0, -0x10000, overlapped)
@@ -222,9 +307,9 @@ class LockFile:
             pass
 
     def lock(self):
-        return True
         try:
             if is_windows():
+                return True
                 hfile = win32file._get_osfhandle(self.__file.fileno())
                 overlapped = pywintypes.OVERLAPPED()
                 flags = win32con.LOCKFILE_EXCLUSIVE_LOCK|win32con.LOCKFILE_FAIL_IMMEDIATELY
@@ -242,31 +327,31 @@ def rotate_logfile(dir,target,logfile_max,suffix='log'):
     suffixes.reverse()
 
     lf = os.path.join(dir,'%s.%d.%s' % (target,logfile_max,suffix))
-    if os.path.exists(lf):
-        os.unlink(lf)
+    if os_path_exists(lf):
+        os_unlink(lf)
 
     for s in suffixes:
         lfo = os.path.join(dir,'%s.%d.%s' % (target,s,suffix))
         lfn = os.path.join(dir,'%s.%d.%s' % (target,s+1,suffix))
-        if os.path.exists(lfo):
-            os.rename(lfo,lfn)
+        if os_path_exists(lfo):
+            os_rename(lfo,lfn)
 
 
 def get_logfile(target,logfile_max=7):
-    dir = user_resource_dir('log')
+    dir = user_resource_dir(log_dir)
     rotate_logfile(dir,target,logfile_max)
     log = os.path.join(dir,'%s.0.log' % target)
     return log
 
 def get_bugfile():
-    dir = user_resource_dir('bugs',version='')
+    dir = user_resource_dir(bugs_dir,version='')
     rotate_logfile(dir,'bug-report',logfile_max=30,suffix='zip')
     log = os.path.join(dir,'%s.0.zip' % 'bug-report')
     return log
 
 class LogFile:
     def __init__(self,target,logfile_max=7):
-        self.__file =  open(get_logfile(target,logfile_max=logfile_max),'w')
+        self.__file =  file_open(get_logfile(target,logfile_max=logfile_max),'w')
         self.__start = time.time()
         print >>self.__file,target,'startup on',str(datetime.datetime.today())
 

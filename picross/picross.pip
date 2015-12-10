@@ -5,7 +5,6 @@
 #include <picross/pic_error.h>
 #include <picross/pic_platform.h>
 #include <picross/pic_power.h>
-#include <picross/pic_mlock.h>
 #include <picross/pic_table.h>
 #include <picross/pic_time.h>
 #include <picross/pic_resources.h>
@@ -220,6 +219,8 @@ stdstr release_resource_dir[pic::release_resource_dir]()
 stdstr global_resource_dir[pic::global_resource_dir]()
 stdstr release_library_dir[pic::release_library_dir]()
 stdstr release_root_dir[pic::release_root_dir]()
+stdstr contrib_root_dir[pic::contrib_root_dir]()
+stdstr contrib_compatible_dir[pic::contrib_compatible_dir]()
 stdstr global_library_dir[pic::global_library_dir]()
 stdstr python_prefix_dir[pic::python_prefix_dir]()
 stdstr public_tools_dir[pic::public_tools_dir]()
@@ -242,6 +243,7 @@ class usbdevice[pic::usbdevice_t]
     stdstr control_in(unsigned char, unsigned char, unsigned short, unsigned short, unsigned)
     void start_pipes()
     void stop_pipes()
+    void close()
 }
 
 class enumerator[pic::usbenumerator_t] /gc/

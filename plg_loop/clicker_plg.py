@@ -20,9 +20,8 @@
 
 import picross
 import piw
-import loop_native
 from pi import agent,atom,const,domain,bundles,resource,action,riff,files,node,upgrade
-from plg_loop import clicker_version as version
+from . import clicker_version as version,loop_native
 import os
 
 class WavSample:
@@ -36,7 +35,7 @@ wav_reader = riff.Root('WAVE', riff.List(**{ 'fmt ': riff.Struct('<hHLLHH'), 'da
 
 def fgetsamples(filename):
     print 'loading samples from ',filename
-    f = open(filename,'rb',0)
+    f = resource.file_open(filename,'rb',0)
     r = wav_reader.read(f)
     print 'sample rate is',r['fmt '][2]
     return loop_native.canonicalise_samples(r['data'],float(r['fmt '][2]))
@@ -51,8 +50,8 @@ def rgetsamples(res):
 
 def wav_resource(name):
     print 'loading wav resource',name
-    uf = resource.user_resource_file('loop',name,version='')
-    if os.path.isfile(uf):
+    uf = resource.user_resource_file(resource.loop_dir,name,version='')
+    if resource.os_path_isfile(uf):
         return fgetsamples(uf)
     return rgetsamples('plg_loop/%s'%name)
 

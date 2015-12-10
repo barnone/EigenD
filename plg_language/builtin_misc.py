@@ -20,12 +20,15 @@
 
 from pi.logic.shortcuts import *
 from pi import action,logic,async,domain,utils,resource,rpc,timeout
-from plg_language import interpreter,noun,imperative,referent
+from . import interpreter,noun,imperative,referent
 import traceback
 
 class SubDelegate(interpreter.Delegate):
     def __init__(self,agent):
         self.__agent = agent
+
+    def user_message(self,err):
+        return self.__agent.user_message(err)
 
     def error_message(self,err):
         return self.__agent.error_message(err)

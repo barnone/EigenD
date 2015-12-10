@@ -20,18 +20,16 @@
 
 from pi import agent,atom,action,domain,bundles,async,container,paths,const,node,policy,logic,utils,proxy,collection
 from pi.logic.shortcuts import *
-from plg_language import controller_version as version
-
 import piw
-import language_native
+from . import controller_version as version,language_native
 
 class Trigger:
     def __init__(self,t,index,controller):
         self.__trigger = piw.fasttrigger(3)
         self.__trigger.attach_to(controller.controller,index)
 
-    def set_key(self,d):
-        self.__trigger.set_key(d)
+    def set_key(self,k):
+        self.__trigger.set_key(k)
 
     def detach(self):
         self.__trigger.detach()
@@ -47,8 +45,8 @@ class Toggle:
         self.__toggle = language_native.toggle(t.get_data())
         self.__toggle.attach_to(controller.controller,index)
 
-    def set_key(self,d):
-        self.__toggle.set_key(d)
+    def set_key(self,k):
+        self.__toggle.set_key(k)
 
     def detach(self):
         self.__toggle.detach()
@@ -64,8 +62,8 @@ class UpDown:
         self.__updown = language_native.updown(t.get_data(),t.domain().biginc,t.domain().inc)
         self.__updown.attach_to(controller.controller,index)
 
-    def set_key(self,d):
-        self.__updown.set_key(d)
+    def set_key(self,k):
+        self.__updown.set_key(k)
 
     def detach(self):
         self.__updown.detach()
@@ -90,8 +88,8 @@ class Selector:
 
         self.__selector.attach_to(self.__controller.controller,self.__index)
 
-    def set_key(self,d):
-        self.__selector.set_key(d)
+    def set_key(self,k):
+        self.__selector.set_key(k)
 
     def detach(self):
         self.__selector.detach()
@@ -105,6 +103,79 @@ class Selector:
     def reset(self,v):
         pass
 
+class DataProxy(node.Client):
+    def __init__(self,connector):
+        self.__connector = connector
+        node.Client.__init__(self)
+
+    def client_opened(self):
+        node.Client.client_opened(self)
+        self.__connector.monitor_data(self.get_data())
+
+    def close_client(self):
+        node.Client.close_client(self)
+
+    def client_data(self,v):
+        self.__connector.monitor_data(v)
+
+class Monitor(proxy.AtomProxy):
+
+    monitor = set(['latency','domain'])
+
+    def __init__(self,connector,address):
+        proxy.AtomProxy.__init__(self)
+        self.address = address
+        self.__connector = connector
+        self.__dataproxy = None
+        self.__mainanchor = piw.canchor()
+        self.__mainanchor.set_client(self)
+        self.__mainanchor.set_address_str(address)
+
+    def disconnect(self):
+        self.__dataproxy = None
+        self.set_data_clone(self.__dataproxy)
+        self.__mainanchor.set_address_str('')
+
+    def node_ready(self):
+        self.__dataproxy = DataProxy(self.__connector)
+        self.__connector.monitor_connected(self)
+        self.set_data_clone(self.__dataproxy)
+
+    def node_removed(self):
+        self.__connector.monitor_disconnected()
+        self.set_data_clone(None)
+        self.__dataproxy = None
+
+    def node_changed(self,parts):
+        if 'domain' in parts:
+            self.node_removed()
+            self.node_ready()
+            return
+
+class ConnectorOutput(atom.Atom):
+
+    def __init__(self,connector):
+        self.__connector = connector
+        self.__monitor = None
+
+        atom.Atom.__init__(self,domain=domain.Aniso(),names='control output',policy=policy.FastReadOnlyPolicy(),protocols="connect-static output nostage")
+
+    def property_change(self,key,value,delegate):
+        if key != 'slave':
+            return
+
+        cur_slaves = self.get_property_termlist('slave')
+
+        if self.__monitor:
+            if not self.__monitor.address in cur_slaves:
+                self.__monitor.disconnect()
+                self.__monitor = None
+
+        if not self.__monitor:
+            if cur_slaves:
+                self.__monitor = Monitor(self.__connector,cur_slaves[0])
+            
+
 class Connector(atom.Atom):
 
     controls = dict(updown=UpDown,selector=Selector,trigger=Trigger,toggle=Toggle)
@@ -115,37 +186,51 @@ class Connector(atom.Atom):
         self.controller = controller
         self.index = index
         self.control = None
+        self.monitor = None
 
-        self[1] = atom.Atom(domain=domain.BoundedInt(-32767,32767),names='key row',init=0,policy=atom.default_policy(self.__change_key_row),protocols="input explicit")
-        self[2] = atom.Atom(domain=domain.BoundedInt(-32767,32767),names='key column',init=0,policy=atom.default_policy(self.__change_key_column),protocols="input explicit")
-        self[3] = atom.Atom(domain=domain.Aniso(),names='feedback',policy=policy.SlowPolicy(self.__reset,callback=self.__feedback_connected),protocols="input explicit")
-        self[4] = atom.Atom(domain=domain.Aniso(),names='output',policy=policy.FastReadOnlyPolicy(),protocols="connect-static output nostage")
+        self[1] = atom.Atom(domain=domain.BoundedInt(-32767,32767),names='key column',init=0,policy=atom.default_policy(self.__change_key_column),protocols="input explicit")
+        self[2] = atom.Atom(domain=domain.BoundedInt(-32767,32767),names='key row',init=0,policy=atom.default_policy(self.__change_key_row),protocols="input explicit")
+        self[3] = atom.Atom(domain=domain.Bool(),names='key column end relative',init=False,policy=atom.default_policy(self.__change_key_column_endrel),protocols="input explicit")
+        self[5] = atom.Atom(domain=domain.Bool(),names='key row end relative',init=False,policy=atom.default_policy(self.__change_key_row_endrel),protocols="input explicit")
+        self[4] = ConnectorOutput(self)
 
-    def __feedback_connected(self,plumber):
-        if plumber is not None:
-            factory = self.controls.get(plumber.domain().control)
-            if factory:
-                self.control = factory(plumber,self.index,self.controller) 
-                self[4].get_policy().data_node().set_source(self.control.fastdata())
-                self.__update_event_key()
-        else:
+    def monitor_connected(self,proxy):
+        self.monitor_disconnected()
+        factory = self.controls.get(proxy.domain().control)
+
+        if factory:
+            self.control = factory(proxy,self.index,self.controller) 
+            self[4].get_policy().data_node().set_source(self.control.fastdata())
+            self.__update_event_key()
+
+    def monitor_disconnected(self):
+        if self.control:
             self[4].get_policy().data_node().clear_source()
-            self.disconnect()
+        self.disconnect()
 
-    def __change_key_row(self,val):
+    def __change_key_column(self,val):
         self[1].set_value(val)
         self.__update_event_key()
         return False
 
-    def __change_key_column(self,val):
+    def __change_key_row(self,val):
         self[2].set_value(val)
+        self.__update_event_key()
+        return False
+
+    def __change_key_column_endrel(self,val):
+        self[3].set_value(val)
+        self.__update_event_key()
+        return False
+
+    def __change_key_row_endrel(self,val):
+        self[5].set_value(val)
         self.__update_event_key()
         return False
 
     def __update_event_key(self):
         if self.control:
-            key = utils.maketuple((piw.makelong(self[1].get_value(),0),piw.makelong(self[2].get_value(),0)), 0)
-            self.control.set_key(key) 
+            self.control.set_key(piw.coordinate(self[1].get_value(),self[2].get_value(),self[3].get_value(),self[5].get_value())) 
 
     def set_controller_clock(self,clock):
         self.get_policy().set_clock(clock)
@@ -153,7 +238,7 @@ class Connector(atom.Atom):
     def set_controller_latency(self,latency):
         self.set_latency(latency)
 
-    def __reset(self,v):
+    def monitor_data(self,v):
         if self.control:
             self.control.reset(v)
 
@@ -225,7 +310,7 @@ class Controller0(piw.controller):
 class Agent(agent.Agent):
 
     def __init__(self,address,ordinal):
-        agent.Agent.__init__(self,names='controller',signature=version,ordinal=ordinal)
+        agent.Agent.__init__(self,names='controller',signature=version,ordinal=ordinal,protocols='controller')
 
         self.domain = piw.clockdomain_ctl()
 
@@ -245,7 +330,7 @@ class Agent(agent.Agent):
         self[1][4] = atom.Atom(domain=domain.BoundedFloat(-1,1),policy=self.input.vector_policy(5,False),names='yaw input')
         self[1][5] = atom.Atom(domain=domain.BoundedFloat(-1,1),policy=self.input.vector_policy(6,False),names='strip position input')
         self[1][6] = atom.Atom(domain=domain.Aniso(),policy=self.input.vector_policy(1,False), names='key input')
-        self[5] = atom.Atom(domain=domain.Aniso(),policy=self.input.merge_nodefault_policy(2,False),names='controller input')
+        self[1][7] = atom.Atom(domain=domain.Aniso(),policy=self.input.merge_nodefault_policy(2,False),names='controller input')
 
         self.add_verb2(1,'create([],None,role(None,[mass([connector])]))', self.__create_connector)
         self.add_verb2(2,'create([un],None,role(None,[mass([connector])]))', self.__uncreate_connector)

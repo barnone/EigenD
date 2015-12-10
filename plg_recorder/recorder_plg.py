@@ -19,10 +19,9 @@
 #
 
 from pi import agent,atom,action,bundles,const,domain,errors,async,resource,utils,schedproxy,node,logic,files,upgrade,paths,toggle
-from plg_recorder import recorder_version as version
+from . import recorder_version as version,recorder_native
 import piw
 import picross
-import recorder_native
 import os
 import glob
 import re
@@ -55,8 +54,8 @@ def render_list(list,offset,renderer):
     return txt+']'
 
 class TakeLibrary:
-    tempdir = resource.user_resource_dir('Recordings-tmp',version='')
-    permdir = resource.user_resource_dir('Recordings',version='')
+    tempdir = resource.user_resource_dir(resource.recordingstmp_dir,version='')
+    permdir = resource.user_resource_dir(resource.recordings_dir,version='')
 
     def __init__(self,obs):
         self.__id = None
@@ -72,28 +71,28 @@ class TakeLibrary:
         return l
 
     def save(self):
-        for path in glob.glob(self.temp_path('*','*')):
+        for path in resource.glob_glob(self.temp_path('*','*')):
             cookie,desc,name = self.__split(path)
             newpath = os.path.join(self.permdir,os.path.basename(path))
-            if os.path.exists(newpath):
-                os.unlink(newpath)
-            os.rename(path,newpath)
+            if resource.os_path_exists(newpath):
+                resource.os_unlink(newpath)
+            resource.os_rename(path,newpath)
             self.__takes[cookie] = (cookie,desc,name,newpath,True)
         self.__observer.library_changed(0)
 
     def write(self,recording,cookie):
         cookie = int(cookie)
         tmppath=os.path.join(resource.get_home_dir(),'tmp')
-        if not os.path.exists(tmppath):
-            os.mkdir(tmppath)
+        if not resource.os_path_exists(tmppath):
+            resource.os_mkdir(tmppath)
         tmpfilepath=os.path.join(tmppath,self.filename(cookie,'None'))
-        if os.path.exists(tmpfilepath):
-            os.unlink(tmpfilepath)
+        if resource.os_path_exists(tmpfilepath):
+            resource.os_unlink(tmpfilepath)
         recording.write(tmpfilepath)
         path = self.temp_path(cookie,'None')
-        if os.path.exists(path):
-            os.unlink(path)
-        os.rename(tmpfilepath,path)
+        if resource.os_path_exists(path):
+            resource.os_unlink(path)
+        resource.os_rename(tmpfilepath,path)
         self.__takes[cookie] = (cookie,self.__describe(cookie,path),'None',path,False)
         self.__observer.library_added(cookie)
     
@@ -104,7 +103,7 @@ class TakeLibrary:
         cookie,desc,oname,path,perm = bits
         newpath = self.perm_path(cookie,name)
         print 'rename',path,'to',newpath
-        os.rename(path,newpath)
+        resource.os_rename(path,newpath)
         self.__takes[cookie] = (cookie,desc,name,newpath,True)
         self.__observer.library_changed(cookie)
 
@@ -118,7 +117,7 @@ class TakeLibrary:
     def delete(self,cookie):
         cookie = int(cookie)
         path = self.cookie2file(cookie)
-        os.unlink(path)
+        resource.os_unlink(path)
         if cookie in self.__takes:
             del self.__takes[cookie]
             self.__observer.library_deleted(cookie)
@@ -144,9 +143,9 @@ class TakeLibrary:
         id = id.replace('<','').replace('>','').replace(':','_').replace('/','_')
         print 'setup',id
         self.__id = id
-        for path in glob.glob(self.temp_path('*','*')):
-            os.remove(path)
-        for path in glob.glob(self.perm_path('*','*')):
+        for path in resource.glob_glob(self.temp_path('*','*')):
+            resource.os_remove(path)
+        for path in resource.glob_glob(self.perm_path('*','*')):
             self.add_file(path)
 
     def name2cookie(self,name):
@@ -366,21 +365,20 @@ def name_subst(name,find,repl):
         oname.append(w)
     return ' '.join(oname)
 
-class AuxOutput(bundles.Output):
-    def __init__(self,callback,*args,**kwds):
+class RecorderOutput(bundles.Output):
+    def __init__(self,linked,callback,*args,**kwds):
+        self.__linked = linked
         self.__callback = callback
         bundles.Output.__init__(self,*args,**kwds)
 
-    def cordinal(self):
-        return self.get_property_long('cordinal')
-
-    def property_change(self,key,value):
+    def property_change(self,key,value,delegate):
         if key == 'name':
-            value = piw.makestring(name_subst(value.as_string(),'output','input'),0)
-            self.__callback(self.cordinal(),True,value)
+            if value is not None and value.is_string():
+                value = piw.makestring(name_subst(value.as_string(),'output','input'),0)
+            self.__callback(self.__linked,True,value)
 
         if key == 'ordinal':
-            self.__callback(self.cordinal(),False,value)
+            self.__callback(self.__linked,False,value)
 
     def callback(self,isname,value):
         if isname:
@@ -389,23 +387,21 @@ class AuxOutput(bundles.Output):
             self.set_ordinal(value)
 
 
-class AuxInput(atom.Atom):
-    def __init__(self,callback,*args,**kwds):
+class RecorderInput(atom.Atom):
+    def __init__(self,linked,callback,*args,**kwds):
+        self.__linked = linked
         self.__callback = callback
         atom.Atom.__init__(self,*args,**kwds)
-
-    def cordinal(self):
-        return self.get_property_long('cordinal')
 
     def callback(self,isname,value):
         self.set_property('name' if isname else 'ordinal',value,notify=False,allow_veto=False)
 
     def set_ordinal(self,value):
-        self.__callback(self.cordinal(),False,value)
+        self.__callback(self.__linked,False,value)
 
     def set_names(self,value):
         value = name_subst(value,'input','output')
-        self.__callback(self.cordinal(),True,value)
+        self.__callback(self.__linked,True,value)
 
     def property_veto(self,key,value):
         if atom.Atom.property_veto(self,key,value):
@@ -419,30 +415,32 @@ class Agent(agent.Agent):
         agent.Agent.__init__(self, signature=version, names='recorder', protocols='bind',container=(3,'agent',atom.VerbContainer(clock_domain=self.domain)),ordinal=ordinal)
 
         def output_link(ordinal,*args,**kwds):
-            self[2][ordinal+4].callback(*args,**kwds)
+            self[2][ordinal].callback(*args,**kwds)
 
         def input_link(ordinal,*args,**kwds):
-            self[1][ordinal+4].callback(*args,**kwds)
+            self[1][ordinal].callback(*args,**kwds)
 
 
         self[2] = atom.Atom(names='outputs')
-        self[2][1] = bundles.Output(1,False,names='activation output', protocols='')
-        self[2][2] = bundles.Output(2,False,names='pressure output', protocols='')
-        self[2][3] = bundles.Output(3,False,names='roll output', protocols='')
-        self[2][4] = bundles.Output(4,False,names='yaw output', protocols='')
-        self[2][15] = bundles.Output(5,False,names='key output', protocols='')
-        self[2][5] = AuxOutput(input_link,1,False,names='auxilliary output', ordinal=1, protocols='')
-        self[2][6] = AuxOutput(input_link,1,False,names='auxilliary output', ordinal=2, protocols='')
-        self[2][7] = AuxOutput(input_link,1,False,names='auxilliary output', ordinal=3, protocols='')
-        self[2][8] = AuxOutput(input_link,1,False,names='auxilliary output', ordinal=4, protocols='')
-        self[2][9] = AuxOutput(input_link,1,False,names='auxilliary output', ordinal=5, protocols='')
-        self[2][10] = AuxOutput(input_link,1,False,names='auxilliary output', ordinal=6, protocols='')
-        self[2][11] = AuxOutput(input_link,1,False,names='auxilliary output', ordinal=7, protocols='')
-        self[2][12] = AuxOutput(input_link,1,False,names='auxilliary output', ordinal=8, protocols='')
-        self[2][13] = AuxOutput(input_link,1,False,names='auxilliary output', ordinal=9, protocols='')
-        self[2][14] = AuxOutput(input_link,1,False,names='auxilliary output', ordinal=10, protocols='')
 
-        self.output_data = bundles.Splitter(self.domain,self[2][1],self[2][2],self[2][3],self[2][4],self[2][15])
+        self[2][2] = RecorderOutput(2,input_link,2,False,names='pressure output', protocols='')
+        self[2][3] = RecorderOutput(3,input_link,3,False,names='roll output', protocols='')
+        self[2][4] = RecorderOutput(4,input_link,4,False,names='yaw output', protocols='')
+        self[2][15] = RecorderOutput(19,input_link,5,False,names='key output', protocols='')
+
+        self[2][5] = RecorderOutput(5,input_link,1,False,names='auxilliary output', ordinal=1, protocols='')
+        self[2][6] = RecorderOutput(6,input_link,1,False,names='auxilliary output', ordinal=2, protocols='')
+        self[2][7] = RecorderOutput(7,input_link,1,False,names='auxilliary output', ordinal=3, protocols='')
+        self[2][8] = RecorderOutput(8,input_link,1,False,names='auxilliary output', ordinal=4, protocols='')
+        self[2][9] = RecorderOutput(9,input_link,1,False,names='auxilliary output', ordinal=5, protocols='')
+        self[2][10] = RecorderOutput(10,input_link,1,False,names='auxilliary output', ordinal=6, protocols='')
+        self[2][11] = RecorderOutput(11,input_link,1,False,names='auxilliary output', ordinal=7, protocols='')
+        self[2][12] = RecorderOutput(12,input_link,1,False,names='auxilliary output', ordinal=8, protocols='')
+        self[2][13] = RecorderOutput(13,input_link,1,False,names='auxilliary output', ordinal=9, protocols='')
+        self[2][14] = RecorderOutput(14,input_link,1,False,names='auxilliary output', ordinal=10, protocols='')
+        self[2][16] = RecorderOutput(15,input_link,1,False,names='controller output', protocols='')
+
+        self.output_data = bundles.Splitter(self.domain,self[2][2],self[2][3],self[2][4],self[2][15])
         self.output_aux1 = bundles.Splitter(self.domain,self[2][5])
         self.output_aux2 = bundles.Splitter(self.domain,self[2][6])
         self.output_aux3 = bundles.Splitter(self.domain,self[2][7])
@@ -453,6 +451,7 @@ class Agent(agent.Agent):
         self.output_aux8 = bundles.Splitter(self.domain,self[2][12])
         self.output_aux9 = bundles.Splitter(self.domain,self[2][13])
         self.output_aux10 = bundles.Splitter(self.domain,self[2][14])
+        self.output_controller = bundles.Splitter(self.domain,self[2][16])
 
         self.poly_data = piw.polyctl(poly_data_initial,self.output_data.cookie(),False,poly_data_headroom)
         self.poly_aux1 = piw.polyctl(poly_aux_initial,self.output_aux1.cookie(),False,poly_aux_headroom)
@@ -465,19 +464,21 @@ class Agent(agent.Agent):
         self.poly_aux8 = piw.polyctl(poly_aux_initial,self.output_aux8.cookie(),False,poly_aux_headroom)
         self.poly_aux9 = piw.polyctl(poly_aux_initial,self.output_aux9.cookie(),False,poly_aux_headroom)
         self.poly_aux10 = piw.polyctl(poly_aux_initial,self.output_aux10.cookie(),False,poly_aux_headroom)
+        self.poly_controller = piw.polyctl(poly_aux_initial,self.output_controller.cookie(),False,poly_aux_headroom)
 
         self.output_clone = piw.clone(True)
-        self.output_clone.set_filtered_output(2,self.poly_data.cookie(),piw.grist_deaggregation_filter2(2,100))
-        self.output_clone.set_filtered_output(3,self.poly_aux1.cookie(),piw.grist_deaggregation_filter(3))
-        self.output_clone.set_filtered_output(4,self.poly_aux2.cookie(),piw.grist_deaggregation_filter(4))
-        self.output_clone.set_filtered_output(5,self.poly_aux3.cookie(),piw.grist_deaggregation_filter(5))
-        self.output_clone.set_filtered_output(6,self.poly_aux4.cookie(),piw.grist_deaggregation_filter(6))
-        self.output_clone.set_filtered_output(7,self.poly_aux5.cookie(),piw.grist_deaggregation_filter(7))
-        self.output_clone.set_filtered_output(8,self.poly_aux6.cookie(),piw.grist_deaggregation_filter(8))
-        self.output_clone.set_filtered_output(9,self.poly_aux7.cookie(),piw.grist_deaggregation_filter(9))
-        self.output_clone.set_filtered_output(10,self.poly_aux8.cookie(),piw.grist_deaggregation_filter(10))
-        self.output_clone.set_filtered_output(11,self.poly_aux9.cookie(),piw.grist_deaggregation_filter(11))
-        self.output_clone.set_filtered_output(12,self.poly_aux10.cookie(),piw.grist_deaggregation_filter(12))
+        self.output_clone.set_filtered_output(2,self.poly_data.cookie(),piw.event_deaggregation_filter2(2,100))
+        self.output_clone.set_filtered_output(3,self.poly_aux1.cookie(),piw.event_deaggregation_filter(3))
+        self.output_clone.set_filtered_output(4,self.poly_aux2.cookie(),piw.event_deaggregation_filter(4))
+        self.output_clone.set_filtered_output(5,self.poly_aux3.cookie(),piw.event_deaggregation_filter(5))
+        self.output_clone.set_filtered_output(6,self.poly_aux4.cookie(),piw.event_deaggregation_filter(6))
+        self.output_clone.set_filtered_output(7,self.poly_aux5.cookie(),piw.event_deaggregation_filter(7))
+        self.output_clone.set_filtered_output(8,self.poly_aux6.cookie(),piw.event_deaggregation_filter(8))
+        self.output_clone.set_filtered_output(9,self.poly_aux7.cookie(),piw.event_deaggregation_filter(9))
+        self.output_clone.set_filtered_output(10,self.poly_aux8.cookie(),piw.event_deaggregation_filter(10))
+        self.output_clone.set_filtered_output(11,self.poly_aux9.cookie(),piw.event_deaggregation_filter(11))
+        self.output_clone.set_filtered_output(12,self.poly_aux10.cookie(),piw.event_deaggregation_filter(12))
+        self.output_clone.set_filtered_output(13,self.poly_controller.cookie(),piw.event_deaggregation_filter(13))
 
         self.output_aggregator = piw.aggregator(self.output_clone.cookie(), self.domain)
 
@@ -491,49 +492,42 @@ class Agent(agent.Agent):
 
         self.input_aggregator = piw.aggregator(self.input_clone.cookie(), self.domain)
 
-        self.input_clock = bundles.ScalarInput(self.input_aggregator.get_filtered_output(1,piw.grist_aggregation_filter(1)), self.domain, signals=(1,2,3))
+        self.input_clock = bundles.ScalarInput(self.input_aggregator.get_filtered_output(1,piw.event_aggregation_filter(1)), self.domain, signals=(1,2,3))
         self.input_clock.add_upstream(self.verb_container().clock)
 
-        self.input_poly = piw.polyctl(10,self.input_aggregator.get_filtered_output(2,piw.grist_aggregation_filter(2)), False,5)
-        self.input_data = bundles.VectorInput(self.input_poly.cookie(), self.domain, signals=(1,2,3,4,5))
+        self.input_poly = piw.polyctl(10, self.input_aggregator.get_filtered_output(2,piw.event_aggregation_filter(2)), False, 5)
+        self.input_data = bundles.VectorInput(self.input_poly.cookie(), self.domain, signals=(2,3,4,5))
 
-        self.input_aux1 = bundles.VectorInput(self.input_aggregator.get_filtered_output(3,piw.grist_aggregation_filter(3)), self.domain, signals=(1,))
-        self.input_aux2 = bundles.VectorInput(self.input_aggregator.get_filtered_output(4,piw.grist_aggregation_filter(4)), self.domain, signals=(1,))
-        self.input_aux3 = bundles.VectorInput(self.input_aggregator.get_filtered_output(5,piw.grist_aggregation_filter(5)), self.domain, signals=(1,))
-        self.input_aux4 = bundles.VectorInput(self.input_aggregator.get_filtered_output(6,piw.grist_aggregation_filter(6)), self.domain, signals=(1,))
-        self.input_aux5 = bundles.VectorInput(self.input_aggregator.get_filtered_output(7,piw.grist_aggregation_filter(7)), self.domain, signals=(1,))
-        self.input_aux6 = bundles.VectorInput(self.input_aggregator.get_filtered_output(8,piw.grist_aggregation_filter(8)), self.domain, signals=(1,))
-        self.input_aux7 = bundles.VectorInput(self.input_aggregator.get_filtered_output(9,piw.grist_aggregation_filter(9)), self.domain, signals=(1,))
-        self.input_aux8 = bundles.VectorInput(self.input_aggregator.get_filtered_output(10,piw.grist_aggregation_filter(10)), self.domain, signals=(1,))
-        self.input_aux9 = bundles.VectorInput(self.input_aggregator.get_filtered_output(11,piw.grist_aggregation_filter(11)), self.domain, signals=(1,))
-        self.input_aux10 = bundles.VectorInput(self.input_aggregator.get_filtered_output(12,piw.grist_aggregation_filter(12)), self.domain, signals=(1,))
-
-        self.nplayer = recorder_native.nplayer(self.output_aggregator.get_filtered_output(3,piw.gristchaff_aggregation_filter(100,3)),16,2,5,self.domain)
-        self.input_clock.add_upstream(self.nplayer.get_clock())
-
-        self.ctl_fb = piw.functor_backend(1,True)
-        self.ctl_fb.set_functor(piw.pathnull(0),self.nplayer.control())
-        self.ctl_input = bundles.ScalarInput(self.ctl_fb.cookie(),self.domain,signals=(1,))
+        self.input_aux1 = bundles.VectorInput(self.input_aggregator.get_filtered_output(3,piw.event_aggregation_filter(3)), self.domain, signals=(1,))
+        self.input_aux2 = bundles.VectorInput(self.input_aggregator.get_filtered_output(4,piw.event_aggregation_filter(4)), self.domain, signals=(1,))
+        self.input_aux3 = bundles.VectorInput(self.input_aggregator.get_filtered_output(5,piw.event_aggregation_filter(5)), self.domain, signals=(1,))
+        self.input_aux4 = bundles.VectorInput(self.input_aggregator.get_filtered_output(6,piw.event_aggregation_filter(6)), self.domain, signals=(1,))
+        self.input_aux5 = bundles.VectorInput(self.input_aggregator.get_filtered_output(7,piw.event_aggregation_filter(7)), self.domain, signals=(1,))
+        self.input_aux6 = bundles.VectorInput(self.input_aggregator.get_filtered_output(8,piw.event_aggregation_filter(8)), self.domain, signals=(1,))
+        self.input_aux7 = bundles.VectorInput(self.input_aggregator.get_filtered_output(9,piw.event_aggregation_filter(9)), self.domain, signals=(1,))
+        self.input_aux8 = bundles.VectorInput(self.input_aggregator.get_filtered_output(10,piw.event_aggregation_filter(10)), self.domain, signals=(1,))
+        self.input_aux9 = bundles.VectorInput(self.input_aggregator.get_filtered_output(11,piw.event_aggregation_filter(11)), self.domain, signals=(1,))
+        self.input_aux10 = bundles.VectorInput(self.input_aggregator.get_filtered_output(12,piw.event_aggregation_filter(12)), self.domain, signals=(1,))
+        self.input_controller = bundles.VectorInput(self.input_aggregator.get_filtered_output(13,piw.event_aggregation_filter(13)), self.domain, signals=(1,))
 
         self[1] = atom.Atom(names='inputs')
 
-        self[1][1]=atom.Atom(domain=domain.BoundedFloat(0,1), policy=self.input_data.vector_policy(1,False),names='activation input')
-        self[1][2]=atom.Atom(domain=domain.BoundedFloat(0,1), policy=self.input_data.vector_policy(2,False),names='pressure input')
-        self[1][3]=atom.Atom(domain=domain.BoundedFloat(-1,1), policy=self.input_data.vector_policy(3,False),names='roll input')
-        self[1][4]=atom.Atom(domain=domain.BoundedFloat(-1,1), policy=self.input_data.vector_policy(4,False),names='yaw input')
-        self[1][19]=atom.Atom(domain=domain.Aniso(), policy=self.input_data.vector_policy(5,False),names='key input')
-        self[1][20]=atom.Atom(domain=domain.Aniso(), policy=self.ctl_input.policy(1,False),names='controller input')
+        self[1][2]=RecorderInput(2,output_link,domain=domain.BoundedFloat(0,1), policy=self.input_data.vector_policy(2,False),names='pressure input')
+        self[1][3]=RecorderInput(3,output_link,domain=domain.BoundedFloat(-1,1), policy=self.input_data.vector_policy(3,False),names='roll input')
+        self[1][4]=RecorderInput(4,output_link,domain=domain.BoundedFloat(-1,1), policy=self.input_data.vector_policy(4,False),names='yaw input')
+        self[1][19]=RecorderInput(15,output_link,domain=domain.Aniso(), policy=self.input_data.vector_policy(5,False),names='key input')
 
-        self[1][5]=AuxInput(output_link,domain=domain.Aniso(), policy=self.input_aux1.vector_policy(1,False),names='auxilliary input', ordinal=1)
-        self[1][6]=AuxInput(output_link,domain=domain.Aniso(), policy=self.input_aux2.vector_policy(1,False),names='auxilliary input', ordinal=2)
-        self[1][7]=AuxInput(output_link,domain=domain.Aniso(), policy=self.input_aux3.vector_policy(1,False),names='auxilliary input', ordinal=3)
-        self[1][8]=AuxInput(output_link,domain=domain.Aniso(), policy=self.input_aux4.vector_policy(1,False),names='auxilliary input', ordinal=4)
-        self[1][9]=AuxInput(output_link,domain=domain.Aniso(), policy=self.input_aux5.vector_policy(1,False),names='auxilliary input', ordinal=5)
-        self[1][10]=AuxInput(output_link,domain=domain.Aniso(), policy=self.input_aux6.vector_policy(1,False),names='auxilliary input', ordinal=6)
-        self[1][11]=AuxInput(output_link,domain=domain.Aniso(), policy=self.input_aux7.vector_policy(1,False),names='auxilliary input', ordinal=7)
-        self[1][12]=AuxInput(output_link,domain=domain.Aniso(), policy=self.input_aux8.vector_policy(1,False),names='auxilliary input', ordinal=8)
-        self[1][13]=AuxInput(output_link,domain=domain.Aniso(), policy=self.input_aux9.vector_policy(1,False),names='auxilliary input', ordinal=9)
-        self[1][14]=AuxInput(output_link,domain=domain.Aniso(), policy=self.input_aux10.vector_policy(1,False),names='auxilliary input', ordinal=10)
+        self[1][5]=RecorderInput(5,output_link,domain=domain.Aniso(), policy=self.input_aux1.vector_policy(1,False),names='auxilliary input', ordinal=1)
+        self[1][6]=RecorderInput(6,output_link,domain=domain.Aniso(), policy=self.input_aux2.vector_policy(1,False),names='auxilliary input', ordinal=2)
+        self[1][7]=RecorderInput(7,output_link,domain=domain.Aniso(), policy=self.input_aux3.vector_policy(1,False),names='auxilliary input', ordinal=3)
+        self[1][8]=RecorderInput(8,output_link,domain=domain.Aniso(), policy=self.input_aux4.vector_policy(1,False),names='auxilliary input', ordinal=4)
+        self[1][9]=RecorderInput(9,output_link,domain=domain.Aniso(), policy=self.input_aux5.vector_policy(1,False),names='auxilliary input', ordinal=5)
+        self[1][10]=RecorderInput(10,output_link,domain=domain.Aniso(), policy=self.input_aux6.vector_policy(1,False),names='auxilliary input', ordinal=6)
+        self[1][11]=RecorderInput(11,output_link,domain=domain.Aniso(), policy=self.input_aux7.vector_policy(1,False),names='auxilliary input', ordinal=7)
+        self[1][12]=RecorderInput(12,output_link,domain=domain.Aniso(), policy=self.input_aux8.vector_policy(1,False),names='auxilliary input', ordinal=8)
+        self[1][13]=RecorderInput(13,output_link,domain=domain.Aniso(), policy=self.input_aux9.vector_policy(1,False),names='auxilliary input', ordinal=9)
+        self[1][14]=RecorderInput(14,output_link,domain=domain.Aniso(), policy=self.input_aux10.vector_policy(1,False),names='auxilliary input', ordinal=10)
+        self[1][15]=RecorderInput(16,output_link,domain=domain.Aniso(), policy=self.input_controller.vector_policy(1,False),names='controller input')
 
         self[1][16]=atom.Atom(domain=domain.BoundedFloat(0,10000000), policy=self.input_clock.nodefault_policy(1,False),names='song beat input')
         self[1][17]=atom.Atom(domain=domain.BoundedFloat(0,100), policy=self.input_clock.nodefault_policy(2,False),names='bar beat input')
@@ -556,10 +550,7 @@ class Agent(agent.Agent):
         self.add_verb2(8,'repeat([],None,role(None,%(x)s),%(o)s)'%c,callback=self.__repeat,**a)
         self.add_verb2(9,'name([],None,role(None,[ideal([~server,take]),singular]),role(to,[abstract]))',self.__name)
         self.add_verb2(10,'copy([],None,role(None,[gideal(take),singular]))',callback=self.__copy)
-        self.add_verb2(11,'use([],None,role(None,[concrete,proto(scheduler),singular]))',callback=self.__usesched)
         self.add_verb2(12,'delete([],None,role(None,[ideal([~server,take]),singular]))',self.__delete)
-        self.add_verb2(13,'play([],None,role(None,[mass([note])]),role(with,[mass([velocity])]))',create_action=self.__playnv,clock=True)
-        self.add_verb2(14,'play([],None,role(None,[mass([note])]),role(with,[mass([velocity])]),role(for,[mass([second])]))',create_action=self.__playnvl,clock=True)
 
         self.add_verb2(15,'play([toggle],None,role(None,%(x)s),%(o)s)'%c,callback=self.__tog_play_now,**a)
         self.add_verb2(16,'play([toggle],None,role(None,%(x)s),role(at,%(c)s),option(until,%(c)s),option(every,%(c)s),%(o)s)'%c,callback=self.__tog_play_aue,**a)
@@ -568,13 +559,12 @@ class Agent(agent.Agent):
         self.add_verb2(19,'repeat([toggle],None,role(None,%(x)s),%(o)s)'%c,callback=self.__tog_repeat,**a)
 
         self.add_verb2(20,'cancel([],None)',self.__cancel)
+        self.add_verb2(21,'cancel([],None,role(from,[concrete,proto(talker),singular]))',self.__cancel_from)
 
         self[4] = TakeBrowser(self)
         self.library = TakeLibrary(self)
 
         self.__scheduler = schedproxy.SchedProxy(delegate=self)
-        self.set_private(node.server(value=piw.makestring('',0),change=self.__schedchange))
-
         self.__schedready = False
 
         self[5] = Voice(self)
@@ -582,6 +572,10 @@ class Agent(agent.Agent):
         # don't use self[6], it was previously used by a legacy status output that was removed in 1.2
 
         self[7]=toggle.Toggle(None,self.domain,container=(None,'overdub',self.verb_container()),init=False,names='overdub',transient=True)
+        self[8]=atom.Atom(domain=domain.String(),names='scheduler identifier',policy=atom.default_policy(self.__schedchange),transient=True)
+
+    def __schedchange(self,arg):
+        self.__scheduler.set_address(arg)
 
     def __is_overdub_enabled(self):
         return self[7].get_value()
@@ -614,11 +608,11 @@ class Agent(agent.Agent):
 
     def scheduler_ready(self):
         self.__schedready = True
-        #print 'attached to scheduler'
+        print 'attached to scheduler'
 
     def scheduler_gone(self):
         self.__schedready = False
-        #print 'detached from scheduler'
+        print 'detached from scheduler'
 
     def __record(self,subject,duration,mode):
 
@@ -682,6 +676,20 @@ class Agent(agent.Agent):
 
     def __cancel(self,*args):
         self.recorder.abort()
+        return action.nosync_return()
+
+    def __cancel_from(self,subj,fr):
+        talker = action.concrete_object(fr)
+        
+        for k,v in list(self[3].items()):
+            masterids = set([x.args[2] for x in v.get_property_termlist('master')])
+            for m in masterids:
+                s = paths.id2server(m)
+                if s == talker:
+                    print 'canceling',k,v.args,v.get_property_termlist('master')
+                    v.rpc_cancel(None)
+                    del self[3][k]
+                    break
         return action.nosync_return()
 
     def __unplay_auto(self):
@@ -804,7 +812,7 @@ class Agent(agent.Agent):
             return async.success(errors.invalid_thing(thing,'play'))
 
         f = self.player.player(cookie,mode)
-        ff = piw.fastchange(f)
+        ff = utils.fastchange(f)
         ff(piw.makefloat_bounded(1,0,0,1,0))
         self.player.unload(cookie,False)
         return action.nosync_return()
@@ -846,7 +854,7 @@ class Agent(agent.Agent):
             return async.success(errors.state_error1('scheduler','use'))
 
         path = self.library.cookie2file(arg)
-        if not path or not os.path.exists(path):
+        if not path or not resource.os_path_exists(path):
             thing='take %s' % str(arg)
             return async.success(errors.invalid_thing(thing,'repeat'))
 
@@ -896,7 +904,7 @@ class Agent(agent.Agent):
             return async.success(errors.state_error1('scheduler','use'))
 
         path = self.library.cookie2file(arg)
-        if not path or not os.path.exists(path):
+        if not path or not resource.os_path_exists(path):
             thing='take %s' %str(arg)
             return async.success(errors.invalid_thing(thing,'play'))
         recording = recorder_native.read(path)
@@ -954,7 +962,7 @@ class Agent(agent.Agent):
         path = self.library.cookie2file(id)
         #print 'path is',path
 
-        if path and os.path.exists(path):
+        if path and resource.os_path_exists(path):
             #print 'loading',id,'from',path,'poly',poly
             r = recorder_native.read(path)
             return self.player.load(id,r,poly)
@@ -993,16 +1001,6 @@ class Agent(agent.Agent):
         self[5].update()
         yield async.Coroutine.success(action.nosync_return())
 
-    def __usesched(self,subject,sched):
-        sched = action.concrete_object(sched)
-        self.__scheduler.set_address(sched)
-        self.get_private().set_data(piw.makestring(sched,0))
-
-    def __schedchange(self,arg):
-        if arg.is_string():
-            self.__scheduler.set_address(arg.as_string())
-            self.get_private().set_data(arg)
-
     def __delete(self,subj,thing):
         self.__unplay(subj,thing)
         cookie = self.__crack_arg(thing)
@@ -1011,19 +1009,5 @@ class Agent(agent.Agent):
             return action.nosync_return()
         except:
             return async.success(errors.invalid_value(cookie,'delete'))
-
-    def __playnvl(self,ctx,subj,note,velocity,s):
-        note = action.mass_quantity(note)
-        velocity = action.mass_quantity(velocity)
-        length = max(1,int(1000000*action.mass_quantity(s)))
-        print 'play note',note,'velocity',velocity,'sec',s,'us',length
-        return self.nplayer.play(note,velocity,length),None
-
-    def __playnv(self,ctx,subj,note,velocity):
-        note = action.mass_quantity(note)
-        velocity = action.mass_quantity(velocity)
-        print 'play note',note,'velocity',velocity
-        return self.nplayer.play(note,velocity,500000),None
-
 
 agent.main(Agent)

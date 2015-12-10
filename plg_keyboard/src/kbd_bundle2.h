@@ -38,7 +38,10 @@ namespace kbd
             ~alpha2_bundle_legacy_t();
 
             std::string name();
-            piw::data_t get_courses();
+            piw::data_t get_columnlen();
+            piw::data_t get_columnoffset();
+            piw::data_t get_courselen();
+            piw::data_t get_courseoffset();
             float get_threshold1();
             float get_threshold2();
             void set_threshold1(float);
@@ -80,7 +83,10 @@ namespace kbd
             ~alpha2_bundle_t();
 
             std::string name();
-            piw::data_t get_courses();
+            piw::data_t get_columnlen();
+            piw::data_t get_columnoffset();
+            piw::data_t get_courselen();
+            piw::data_t get_courseoffset();
             float get_threshold1();
             float get_threshold2();
             void set_threshold1(float);
@@ -123,6 +129,10 @@ namespace kbd
             void loopback_gain(float);
             void headphone_gain(unsigned);
             void headphone_limit(bool);
+            void debounce_time(unsigned long us);
+            void threshold_time(unsigned long long us);
+            void key_threshold(unsigned);
+            void key_noise(unsigned);
 
             void restart();
 
@@ -136,7 +146,10 @@ namespace kbd
             tau_bundle_t(pic::usbdevice_t *usb,const piw::cookie_t &kc,const pic::notify_t &dead);
             ~tau_bundle_t();
             std::string name();
-            piw::data_t get_courses();
+            piw::data_t get_columnlen();
+            piw::data_t get_columnoffset();
+            piw::data_t get_courselen();
+            piw::data_t get_courseoffset();
             float get_threshold1();
             float get_threshold2();
             void set_threshold1(float);
@@ -170,6 +183,10 @@ namespace kbd
             void headphone_enable(bool);
             void headphone_limit(bool);
             void headphone_gain(unsigned);
+            void debounce_time(unsigned long us);
+            void threshold_time(unsigned long long us);
+            void key_threshold(unsigned);
+            void key_noise(unsigned);
 
             void restart();
 

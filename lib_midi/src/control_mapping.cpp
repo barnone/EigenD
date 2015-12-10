@@ -26,8 +26,118 @@
 namespace midi
 {
     /*
+     * decimation_handler_t
+     */
+
+    class decimation_handler_t
+    {
+        public:
+            decimation_handler_t() {};
+            virtual ~decimation_handler_t() {};
+
+            virtual bool valid_for_processing(const mapping_data_t &data, const piw::data_nb_t &id, unsigned long long current_time) = 0;
+            virtual void done_processing(const piw::data_nb_t &id) = 0;
+            virtual decimation_handler_t* new_instance() = 0;
+    };
+}
+
+namespace
+{
+    /*
+     * global_decimation_handler_t
+     */
+
+    class global_decimation_handler_t: public midi::decimation_handler_t
+    {
+        public:
+            global_decimation_handler_t() : last_processed_(0) {};
+
+            bool valid_for_processing(const midi::mapping_data_t &data, const piw::data_nb_t &id, unsigned long long current_time)
+            {
+                if(!data.decimation_)
+                {
+                    return true;
+                }
+
+                if(last_processed_ + (data.decimation_*1000) > current_time)
+                {
+                    return false;
+                }
+
+                last_processed_ = current_time;
+                return true;
+            }
+
+            void done_processing(const piw::data_nb_t &id)
+            {
+            }
+
+            decimation_handler_t* new_instance()
+            {
+                return new global_decimation_handler_t();
+            }
+
+        private:
+            unsigned long long last_processed_;
+    };
+
+    /*
+     * perid_decimation_handler_t
+     */
+
+    typedef pic::lckmap_t<piw::data_nb_t,unsigned long long>::nbtype nb_lastprocessed_map_t;
+
+    class perid_decimation_handler_t: public midi::decimation_handler_t
+    {
+        public:
+            bool valid_for_processing(const midi::mapping_data_t &data, const piw::data_nb_t &id, unsigned long long current_time)
+            {
+                if(!data.decimation_)
+                {
+                    return true;
+                }
+
+                nb_lastprocessed_map_t::iterator il;
+                il = last_processed_.find(id);
+                if(il == last_processed_.end())
+                {
+                    last_processed_.insert(std::make_pair(id, current_time));
+                }
+                else
+                {
+                    unsigned long long last = il->second;
+                    if(last + (data.decimation_*1000) > current_time)
+                    {
+                        return false;
+                    }
+                    
+                    il->second = current_time;
+                }
+
+                return true;
+            }
+
+            void done_processing(const piw::data_nb_t &id)
+            {
+                last_processed_.erase(id);
+            }
+
+            decimation_handler_t* new_instance()
+            {
+                return new perid_decimation_handler_t();
+            }
+
+        private:
+            nb_lastprocessed_map_t last_processed_;
+    };
+}
+
+namespace midi
+{
+    /*
      * mapping_data_t
      */
+
     float mapping_data_t::calculate(float norm_data) const
     {
         float d = norm_data;
@@ -49,6 +159,102 @@ namespace midi
         float v = d*scale_;
         return v*lo_*(v<0) + base_ + v*hi_*(v>0);
     }
+
+
+    /*
+     * mapping_wrapper_t
+     */
+
+    mapping_wrapper_t::mapping_wrapper_t(bool decimate_per_id, float scale, float lo, float base, float hi, bool origin_return,
+            float decimation, unsigned scope, unsigned channel, unsigned resolution, int secondary,
+            unsigned curve): mapping_data_t(scale, lo, base, hi, origin_return, decimation, scope, channel,
+                resolution, secondary, curve),
+            decimation_handler_(decimate_per_id ? (decimation_handler_t *)new perid_decimation_handler_t() : (decimation_handler_t *)new global_decimation_handler_t())
+    {
+    };
+
+    mapping_wrapper_t::mapping_wrapper_t(const mapping_wrapper_t &o): mapping_data_t(o), decimation_handler_(o.decimation_handler_->new_instance())
+    {
+    };
+
+    mapping_wrapper_t::~mapping_wrapper_t()
+    {
+        delete decimation_handler_;
+    };
+
+    bool mapping_wrapper_t::valid_for_processing(const piw::data_nb_t &id, unsigned long long current_time)
+    {
+        return decimation_handler_->valid_for_processing(*this, id, current_time);
+    };
+
+    void mapping_wrapper_t::done_processing(const piw::data_nb_t &id)
+    {
+        decimation_handler_->done_processing(id);
+    };
+
+
+    /*
+     * global_settings_t
+     */
+
+    global_settings_t global_settings_t::clone_with_midi_channel(unsigned channel)
+    {
+        return global_settings_t(channel, minimum_midi_channel_, maximum_midi_channel_, minimum_decimation_, send_notes_, send_pitchbend_, send_hires_velocity_, pitchbend_semitones_up_, pitchbend_semitones_down_);
+    }
+
+    global_settings_t global_settings_t::clone_with_minimum_midi_channel(unsigned min)
+    {
+        return global_settings_t(midi_channel_, min, maximum_midi_channel_, minimum_decimation_, send_notes_, send_pitchbend_, send_hires_velocity_, pitchbend_semitones_up_, pitchbend_semitones_down_);
+    }
+
+    global_settings_t global_settings_t::clone_with_maximum_midi_channel(unsigned max)
+    {
+        return global_settings_t(midi_channel_, minimum_midi_channel_, max, minimum_decimation_, send_notes_, send_pitchbend_, send_hires_velocity_, pitchbend_semitones_up_, pitchbend_semitones_down_);
+    }
+
+    global_settings_t global_settings_t::clone_with_minimum_decimation(float dec)
+    {
+        return global_settings_t(midi_channel_, minimum_midi_channel_, maximum_midi_channel_, dec, send_notes_, send_pitchbend_, send_hires_velocity_, pitchbend_semitones_up_, pitchbend_semitones_down_);
+    }
+
+    global_settings_t global_settings_t::clone_with_send_notes(bool notes)
+    {
+        return global_settings_t(midi_channel_, minimum_midi_channel_, maximum_midi_channel_, minimum_decimation_, notes, send_pitchbend_, send_hires_velocity_, pitchbend_semitones_up_, pitchbend_semitones_down_);
+    }
+
+    global_settings_t global_settings_t::clone_with_send_pitchbend(bool pb)
+    {
+        return global_settings_t(midi_channel_, minimum_midi_channel_, maximum_midi_channel_, minimum_decimation_, send_notes_, pb, send_hires_velocity_, pitchbend_semitones_up_, pitchbend_semitones_down_);
+    }
+
+    global_settings_t global_settings_t::clone_with_send_hires_velocity(bool hivel)
+    {
+        return global_settings_t(midi_channel_, minimum_midi_channel_, maximum_midi_channel_, minimum_decimation_, send_notes_, send_pitchbend_, hivel, pitchbend_semitones_up_, pitchbend_semitones_down_);
+    }
+
+    global_settings_t global_settings_t::clone_with_pitchbend_semitones_up(float pbup)
+    {
+        return global_settings_t(midi_channel_, minimum_midi_channel_, maximum_midi_channel_, minimum_decimation_, send_notes_, send_pitchbend_, send_hires_velocity_, pbup, pitchbend_semitones_down_);
+    }
+
+    global_settings_t global_settings_t::clone_with_pitchbend_semitones_down(float pbdown)
+    {
+        return global_settings_t(midi_channel_, minimum_midi_channel_, maximum_midi_channel_, minimum_decimation_, send_notes_, send_pitchbend_, send_hires_velocity_, pitchbend_semitones_up_, pbdown);
+    }
+
+    bool global_settings_t::operator==(const global_settings_t &o) const
+    {
+        return o.midi_channel_ == midi_channel_ && 
+            o.minimum_midi_channel_ == minimum_midi_channel_ && 
+            o.maximum_midi_channel_ == maximum_midi_channel_ &&
+            o.minimum_decimation_ == minimum_decimation_ &&
+            o.send_notes_ == send_notes_ && 
+            o.send_pitchbend_ == send_pitchbend_ && 
+            o.send_hires_velocity_ == send_hires_velocity_ &&
+            o.pitchbend_semitones_up_ == pitchbend_semitones_up_ && 
+            o.pitchbend_semitones_down_ == pitchbend_semitones_down_;
+    }
+
 
     /*
      * mapping_info_t
@@ -114,6 +320,7 @@ namespace midi
         return mapping_info_t(oparam_, enabled_, scale_, lo_, base_, hi_, origin_return_, decimation_, scope_, channel_, resolution_, secondary_cc_, curve);
     }
 
+
     /*
      * controllers_mapping_t
      */
@@ -133,31 +340,7 @@ namespace midi
         {
             piw::term_t t2(t.arg(i));
 
-            if(0==strcmp("s",t2.pred()))
-            {
-                float minimum_decimation = 0.f;
-                bool send_notes = true;
-                bool send_pitchbend = true;
-                bool send_hires_velocity = false;
-                if(t2.arity() >= 3 &&
-                    t2.arg(0).value().type()==BCTVTYPE_FLOAT && 
-                    t2.arg(1).value().type()==BCTVTYPE_BOOL && 
-                    t2.arg(2).value().type()==BCTVTYPE_BOOL)
-                {
-                    minimum_decimation = t2.arg(0).value().as_float();
-                    send_notes = t2.arg(1).value().as_bool();
-                    send_pitchbend = t2.arg(2).value().as_bool();
-
-                    if(t2.arity() >= 4 &&
-                        t2.arg(3).value().type()==BCTVTYPE_BOOL)
-                    {
-                        send_hires_velocity = t2.arg(3).value().as_bool();
-                    }
-                }
-
-                mapping_.alternate().settings_ = global_settings_t(minimum_decimation, send_notes, send_pitchbend, send_hires_velocity);
-            }
-            else
+            if(0==strcmp("m",t2.pred()) || 0==strcmp("c",t2.pred()))
             {
                 bool au_mapping = (0==strcmp("m",t2.pred()));
                 bool midi_mapping = (0==strcmp("c",t2.pred()));
@@ -249,7 +432,7 @@ namespace midi
     std::string controllers_mapping_t::get_mapping()
     {
         pic::flipflop_t<mapping_t>::guard_t mg(mapping_);
-        piw::term_t t("mapping",mg.value().map_params_.size()+mg.value().map_midi_.size()+1);
+        piw::term_t t("mapping",mg.value().map_params_.size()+mg.value().map_midi_.size());
 
         control_map_t::const_iterator mi, me;
         unsigned i = 0;
@@ -298,21 +481,62 @@ namespace midi
             t.set_arg(i,t2);
         }
 
-        {
-            piw::term_t t2("s",4);
-            t2.set_arg(0,piw::makefloat(mg.value().settings_.minimum_decimation_));
-            t2.set_arg(1,piw::makebool(mg.value().settings_.send_notes_));
-            t2.set_arg(2,piw::makebool(mg.value().settings_.send_pitchbend_));
-            t2.set_arg(3,piw::makebool(mg.value().settings_.send_hires_velocity_));
-            t.set_arg(i,t2);
-            ++i;
-        }
-
         return t.render();
+    }
+
+    void controllers_mapping_t::unmap_span_overlaps(unsigned iparam, int oparam)
+    {
+        control_map_t &m = mapping_.alternate().map_params_;
+        global_settings_t &s = mapping_.alternate().settings_;
+
+        int poly_range = s.maximum_midi_channel_ - s.minimum_midi_channel_;
+        std::pair<control_map_t::iterator,control_map_t::iterator> i(m.equal_range(iparam));
+        while(i.first!=i.second && i.first!=m.end())
+        {
+            if(i.first->first==iparam &&
+               (i.first->second.oparam_>oparam &&
+                i.first->second.oparam_<=oparam+poly_range))
+            {
+                control_map_t::iterator to_erase = i.first;
+                i.first++;
+                m.erase(to_erase);
+            }
+            else
+            {
+                i.first++;
+            }
+        }
+        mapping_.alternate().serial_++;
+        mapping_.exchange();
     }
 
     void controllers_mapping_t::map_param(unsigned iparam, mapping_info_t &info)
     {
+        global_settings_t &s = mapping_.alternate().settings_;
+
+        // ensure that this mapping is not overlapping with an
+        // existing per-note span and the midi channel scope
+        if(info.oparam_ > 0 && 0 == s.midi_channel_)
+        {
+            control_map_t &m = mapping_.alternate().map_params_;
+            int poly_range = s.maximum_midi_channel_ - s.minimum_midi_channel_;
+            for(int o = info.oparam_-1; o >= 0 && o >= info.oparam_-poly_range; --o)
+            {
+                mapping_info_t poly_info = get_info(m,iparam,o);
+                if(poly_info.is_valid() && PERNOTE_SCOPE == poly_info.scope_)
+                {
+                    return;
+                }
+            }
+        }
+         
+        // ensure that there are no param mappings that overlap
+        // with possible per-note spans and the midi channel scope
+        if(PERNOTE_SCOPE == info.scope_ && 0 == s.midi_channel_)
+        {
+            unmap_span_overlaps(iparam, info.oparam_);
+        }
+
         map(mapping_.alternate().map_params_,iparam,info);
     }
 
@@ -324,7 +548,6 @@ namespace midi
     void controllers_mapping_t::map(control_map_t &m, unsigned iparam, mapping_info_t info)
     {
         std::pair<control_map_t::iterator,control_map_t::iterator> i(m.equal_range(iparam));
-        
         while(i.first!=i.second && i.first!=m.end())
         {
             if(i.first->first==iparam &&
@@ -498,11 +721,51 @@ namespace midi
 
     void controllers_mapping_t::change_settings(global_settings_t settings)
     {
+        if (mapping_.alternate().settings_ == settings)
+        {
+            return;
+        }
+
         mapping_.alternate().settings_ = settings;
         mapping_.alternate().serial_++;
         mapping_.exchange();
         listener_.mapping_changed(get_mapping());
+        settings_changed();
+    }
+
+    void controllers_mapping_t::settings_changed()
+    {
+        global_settings_t &s = mapping_.alternate().settings_;
+
+        // ensure that there are no param mappings that overlap
+        // with possible per-note spans and the midi channel scope
+        if(0 == s.midi_channel_)
+        {
+            std::map<unsigned, int> spans;
+
+            control_map_t &m = mapping_.alternate().map_params_;
+            control_map_t::iterator it;
+            for(it=m.begin(); it!=m.end(); it++)
+            {
+                if(it->second.oparam_ >=0 && PERNOTE_SCOPE == it->second.scope_)
+                {
+                    spans.insert(std::make_pair(it->first, it->second.oparam_));
+                }
+            }
+
+            std::map<unsigned, int>::iterator s_it;
+            for(s_it = spans.begin(); s_it != spans.end(); s_it++)
+            {
+                unmap_span_overlaps(s_it->first, s_it->second);
+            }
+
+            mapping_.alternate().serial_++;
+            mapping_.exchange();
+            listener_.mapping_changed(get_mapping());
+        }
+
         listener_.settings_changed();
+        listener_.parameter_changed(1);
     }
 
     controllers_map_range_t controllers_mapping_t::param_mappings(unsigned name)
@@ -594,7 +857,7 @@ namespace midi
             if(ip.first->second.is_valid() && ip.first->second.enabled_)
             {
                 mapping.params_.insert(std::make_pair(ip.first->second.oparam_, 
-                    mapping_wrapper_t(ip.first->second.scale_, ip.first->second.lo_, ip.first->second.base_,
+                    mapping_wrapper_t(false, ip.first->second.scale_, ip.first->second.lo_, ip.first->second.base_,
                         ip.first->second.hi_, ip.first->second.origin_return_, std::max(acquired_->settings_.minimum_decimation_,ip.first->second.decimation_),
                         ip.first->second.scope_, ip.first->second.channel_, ip.first->second.resolution_,
                         ip.first->second.secondary_cc_, ip.first->second.curve_)));
@@ -614,8 +877,15 @@ namespace midi
         {
             if(ic.first->second.is_valid() && ic.first->second.enabled_)
             {
-                mapping.midi_.insert(std::make_pair(ic.first->second.oparam_,
-                    mapping_wrapper_t(ic.first->second.scale_, ic.first->second.lo_, ic.first->second.base_,
+                bool decimate_per_id = false;
+                unsigned oparam = ic.first->second.oparam_;
+                if(oparam == MIDI_CC_MAX + POLY_AFTERTOUCH)
+                {
+                    decimate_per_id = true;
+                }
+
+                mapping.midi_.insert(std::make_pair(oparam,
+                    mapping_wrapper_t(decimate_per_id, ic.first->second.scale_, ic.first->second.lo_, ic.first->second.base_,
                         ic.first->second.hi_, ic.first->second.origin_return_, std::max(acquired_->settings_.minimum_decimation_,ic.first->second.decimation_),
                         ic.first->second.scope_, ic.first->second.channel_, ic.first->second.resolution_,
                         ic.first->second.secondary_cc_, ic.first->second.curve_)));

@@ -464,7 +464,9 @@ class server(piw.server):
                 continue
             else:
                 c=self.__creator(k)
-                if c is not None: self[k]=c
+                if c is None or (self.__children and k in self.__children):
+                    continue
+                self[k]=c
 
     def dynamic_destroy(self,index,node):
         pass
@@ -769,7 +771,7 @@ class client(piw.client):
             piw.client.set_sink(self,sink)
 
     def clear_sink(self):
-        self.set_sink(None)
+        piw.client.clear_sink()
 
     def close_client(self):
         if self.__children is not None:

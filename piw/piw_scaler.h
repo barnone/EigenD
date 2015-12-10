@@ -35,9 +35,9 @@
 #define SCALER_CONTROL 13
 #define SCALER_OVERRIDE 14
 #define SCALER_OCTAVE 15
-#define SCALER_KNUMBER 16
 #define SCALER_ROCTAVE 17
-#define SCALER_IN_MASK SIG13(SCALER_KEY,SCALER_TONIC,SCALER_BASE,SCALER_SCALE,SCALER_KBEND,SCALER_GBEND,SCALER_KRANGE,SCALER_GRANGE,SCALER_CONTROL,SCALER_OVERRIDE,SCALER_OCTAVE,SCALER_KNUMBER,SCALER_ROCTAVE)
+#define SCALER_MODIFIER 18
+#define SCALER_IN_MASK SIG13(SCALER_KEY,SCALER_TONIC,SCALER_BASE,SCALER_SCALE,SCALER_KBEND,SCALER_GBEND,SCALER_KRANGE,SCALER_GRANGE,SCALER_CONTROL,SCALER_OVERRIDE,SCALER_OCTAVE,SCALER_ROCTAVE,SCALER_MODIFIER)
 
 // outputs
 #define SCALER_SCALENOTE 6 
@@ -68,7 +68,7 @@ namespace piw
 
             struct scale_t: pic::atomic_counted_t, pic::lckobject_t
             {
-                scale_t(const std::string &s) { parsevector(s,&notes_,13); }
+                scale_t(const std::string &s) : definition_(s) { parsevector(s,&notes_,13); }
 
                 unsigned size()
                 {
@@ -82,8 +82,8 @@ namespace piw
 
                 float interpolate(float i)
                 {
-                    unsigned s = notes_.size();
-                    unsigned j = i;
+                    int s = notes_.size();
+                    int j = i;
                     float r = i-(float)j;
 
                     if(j<0) return notes_[0];
@@ -95,13 +95,14 @@ namespace piw
                 }
 
                 pic::lckvector_t<float>::nbtype notes_;
+                const std::string definition_;
             };
 
             typedef pic::ref_t<scale_t> sref_t;
 
             struct layout_t: pic::atomic_counted_t, pic::lckobject_t
             {
-                layout_t(const data_nb_t &offsets, const data_nb_t &lengths)
+                layout_t(const data_nb_t &offsets, const data_nb_t &lengths) : offsets_definition_(offsets), lengths_definition_(lengths)
                 {
                     pic::lckvector_t<float>::nbtype co;
 
@@ -223,6 +224,9 @@ namespace piw
                 pic::lckvector_t<int>::nbtype course_offset_key_;
                 pic::lckvector_t<float>::nbtype course_offset_note_;
                 pic::lckvector_t<float>::nbtype lengths_;
+
+                const data_nb_t offsets_definition_;
+                const data_nb_t lengths_definition_;
             };
 
             typedef pic::ref_t<layout_t> lref_t;
@@ -240,7 +244,7 @@ namespace piw
             };
 
         public:
-            scaler_controller_t();
+            scaler_controller_t(const cookie_t &l);
             ~scaler_controller_t();
             cookie_t cookie();
 
@@ -249,6 +253,7 @@ namespace piw
             unsigned common_scale_count();
             sref_t common_scale_at(unsigned);
             bits_t bits(const piw::data_nb_t &id);
+            void update_lights(const piw::data_nb_t &id, piw::scaler_controller_t::sref_t scale, float mode, bool override);
 
         private:
             impl_t *impl_;
@@ -260,7 +265,7 @@ namespace piw
             class impl_t;
 
         public:
-            scaler_t(scaler_controller_t *,const cookie_t &c,const cookie_t &l,const pic::f2f_t &b);
+            scaler_t(scaler_controller_t *,const cookie_t &c,const pic::f2f_t &b);
             ~scaler_t();
 
             void set_bend_curve(const pic::f2f_t &b);

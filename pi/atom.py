@@ -42,19 +42,17 @@ def readonly_policy():
 def null_domain():
     return domain.Null()
 
-standard_veto = set(['latency','frelation','modes','verbs','domain','ideals','protocols','timestamp','cname','cordinal'])
-
-class ModeEntry:
-    pass
+standard_veto = set(['latency','frelation','modes','verbs','domain','ideals','protocols','timestamp','cname','cordinal','vocab'])
 
 class VerbEntry:
     pass
 
 class Atom(node.Server):
 
-    def __init__(self,init=None,domain=None,policy=None,transient=False,rtransient=False,names=None,protocols=None,ordinal=None,fuzzy=None,creator=None,wrecker=None,pronoun=None,icon=None,container=None,ideals=None,bignode=False,dynlist=False):
+    def __init__(self,init=None,domain=None,policy=None,transient=False,rtransient=False,names=None,protocols=None,ordinal=None,fuzzy=None,creator=None,wrecker=None,pronoun=None,icon=None,container=None,ideals=None,bignode=False,dynlist=False,vocab=None):
 
         self.__listeners = []
+        self.__connection_scope = None
 
         ex = const.ext_node if bignode else None
         node.Server.__init__(self,creator=creator,wrecker=wrecker,rtransient=rtransient,extension=ex,dynlist=dynlist)
@@ -129,13 +127,39 @@ class Atom(node.Server):
             self.__container = c
             self.__label = l
             self.__verblist = {}
-            self.__modelist = {}
 
             if n is not None:
                 self[n] = c
 
+        if vocab:
+            self.set_vocab(vocab)
+
+    def set_vocab(self,vocab):
+        if vocab:
+            self.set_property_termlist('vocab',[ logic.make_term(e,m,c) for (e,(m,c)) in vocab.iteritems() ],notify=False)
+        else:
+            self.del_property('vocab')
+
+    def load_value(self,delegate,value):
+        self.__server_change(value,delegate)
+
     def server_change(self,new_value):
         node.Server.server_change(self,new_value)
+
+        class DummyDelegate:
+            def __init__(self):
+                self.errors = []
+            def add_error(self,msg):
+                self.errors.append(msg)
+
+        d = DummyDelegate()
+        self.__server_change(new_value,d)
+        if d.errors:
+            print 'errors setting value'
+            for e in d.errors:
+                print '* ',e
+
+    def __server_change(self,new_value,delegate):
 
         if new_value.is_dict():
             old_value = node.Server.get_data(self)
@@ -147,56 +171,56 @@ class Atom(node.Server):
             keys_common = old_keys.intersection(new_keys)
 
             for k in keys_del:
-                self.set_property(k,None,allow_veto=True)
+                self.set_property(k,None,allow_veto=True,delegate=delegate)
 
             for k in keys_create:
                 v = new_value.as_dict_lookup(k)
-                self.set_property(k,v,allow_veto=True)
+                self.set_property(k,v,allow_veto=True,delegate=delegate)
 
             for k in keys_common:
                 v = new_value.as_dict_lookup(k)
                 if old_value.as_dict_lookup(k) != v:
-                    self.set_property(k,v,allow_veto=True)
+                    self.set_property(k,v,allow_veto=True,delegate=delegate)
 
-    def set_property_long(self,key,value,allow_veto=False,notify=True):
-        self.set_property(key,piw.makelong(value,0),allow_veto,notify)
+    def set_property_long(self,key,value,allow_veto=False,notify=True,delegate=None):
+        self.set_property(key,piw.makelong(value,0),allow_veto,notify,delegate)
 
     def get_property_long(self,key,default = 0):
         v = self.get_property(key,None)
         return v.as_long() if v and v.is_long() else default
 
-    def set_property_string(self,key,value,allow_veto=False,notify=True):
-        self.set_property(key,piw.makestring(value,0),allow_veto,notify)
+    def set_property_string(self,key,value,allow_veto=False,notify=True,delegate=None):
+        self.set_property(key,piw.makestring(value,0),allow_veto,notify,delegate)
 
     def get_property_string(self,key,default = ''):
         v = self.get_property(key,None)
         return v.as_string() if v and v.is_string() else default
 
-    def set_property_termlist(self,key,value,allow_veto=False,notify=True):
-        self.set_property(key,piw.makestring(logic.render_termlist(value),0),allow_veto,notify)
+    def set_property_termlist(self,key,value,allow_veto=False,notify=True,delegate=None):
+        self.set_property(key,piw.makestring(logic.render_termlist(value),0),allow_veto,notify,delegate)
 
     def get_property_termlist(self,key,default = []):
         v = self.get_property(key,None)
         if v and v.is_string(): return logic.parse_clauselist(v.as_string(),nosubst=True)
         return copy.copy(default)
 
-    def add_property_termlist(self,key,term,allow_veto=False,notify=True):
+    def add_property_termlist(self,key,term,allow_veto=False,notify=True,delegate=None):
         term = logic.parse_clause(term,nosubst=True)
         l = self.get_property_termlist(key)
         if term not in l: l.append(term)
-        self.set_property_termlist(key,l,allow_veto,notify)
+        self.set_property_termlist(key,l,allow_veto,notify,delegate)
 
-    def del_property_termlist(self,key,term,allow_veto=False,notify=True):
+    def del_property_termlist(self,key,term,allow_veto=False,notify=True,delegate=None):
         term = logic.parse_clause(term,nosubst=True)
         l = self.get_property_termlist(key)
         if term in l:
             l.remove(term)
-        self.set_property_termlist(key,l,allow_veto,notify)
+        self.set_property_termlist(key,l,allow_veto,notify,delegate)
 
-    def del_property(self,key,allow_veto=False,notify=True):
-        self.set_property(key,None,allow_veto,notify)
+    def del_property(self,key,allow_veto=False,notify=True,delegate=None):
+        self.set_property(key,None,allow_veto,notify,delegate)
 
-    def set_property(self,key,value,allow_veto=False,notify=True):
+    def set_property(self,key,value,allow_veto=False,notify=True,delegate=None):
         if key == 'ordinal':
             if value == self.get_property('cordinal'):
                 value = None
@@ -212,7 +236,7 @@ class Atom(node.Server):
             for lr in self.__listeners[:]:
                 l = lr
                 if l is not None:
-                    if l(True,key,value):
+                    if l.property_veto(key,value):
                         return
 
         old_value = node.Server.get_data(self)
@@ -225,11 +249,11 @@ class Atom(node.Server):
         node.Server.set_data(self,d)
 
         if notify:
-            self.property_change(key,value)
+            self.property_change(key,value,delegate)
             for lr in self.__listeners[:]:
                 l = lr
                 if l is not None:
-                    l(False,key,value)
+                    l.property_change(key,value,delegate)
 
     def get_property(self,key,default=None):
         v = node.Server.get_data(self).as_dict_lookup(key)
@@ -255,7 +279,7 @@ class Atom(node.Server):
                 self.__listeners.remove(l)
                 break
 
-    def property_change(self,key,value):
+    def property_change(self,key,value,delegate):
         pass
 
     def property_veto(self,key,value):
@@ -296,21 +320,6 @@ class Atom(node.Server):
                 return (errors.out_of_range(range,'set'),)
             return (errors.invalid_value(value,'set'),)
         self.change_value(value)
-
-    def add_mode2(self,label,schema,icallback,qcallback,ccallback,acallback=None):
-        #action.check_mode_schema(schema)
-
-        assert label not in self.__modelist
-
-        s = ModeEntry()
-        s.schema = 'v(%d,%s)' % (label,schema)
-        s.icallback = utils.weaken(icallback)
-        s.ccallback = utils.weaken(ccallback)
-        s.qcallback = utils.weaken(qcallback)
-        s.acallback = utils.weaken(acallback)
-
-        self.__modelist[label]=s
-        self.set_property_string('modes',','.join([s.schema for s in self.__modelist.itervalues()]))
 
     def add_verb2(self,label,schema,callback=None,create_action=None,destroy_action=None,clock=False,status_action=None):
         #action.check_verb_schema(schema)
@@ -425,60 +434,6 @@ class Atom(node.Server):
         else:
             return self.__fastinvoke(server,args)
 
-    def rpc_mattach(self,arg):
-        args = action.unmarshal(arg)
-        print 'attaching',args
-        index = args[0]
-        id = args[1]
-        args = args[2:]
-        server = self.__modelist[index]
-
-        if server.acallback:
-            if not server.acallback(id,*args):
-                return async.success(action.marshal(None))
-
-        return async.success(action.marshal(id))
-
-    def rpc_mcancel(self,arg):
-        args = action.unmarshal(arg)
-        print 'canceling',args
-        index = args[0]
-        id = args[1]
-        server = self.__modelist[index]
-
-        if server.ccallback(id):
-            return async.success(action.marshal(id))
-
-        return async.success(action.marshal(None))
-
-    def rpc_mfind(self,arg):
-        args = action.unmarshal(arg)
-        index = int(args[0])
-        args = args[1:]
-        server = self.__modelist[index]
-
-        result = tuple(server.qcallback(*args))
-        return async.success(action.marshal(result))
-
-    def rpc_minvoke(self,arg):
-        args = action.unmarshal(arg)
-        index = int(args[0])
-        args = args[1:]
-        server = self.__modelist[index]
-
-        result = server.icallback(*args)
-
-        if not isinstance(result,async.Deferred):
-            return async.success(action.marshal(result))
-
-        deferred = async.Deferred()
-
-        def success(value):
-            deferred.succeeded(action.marshal(value))
-
-        result.setCallback(success).setErrback(deferred.failed)
-        return deferred
-
     def __status_action(self,index,ctx,*arg):
         s = self.__verblist[index]
 
@@ -494,6 +449,7 @@ class Atom(node.Server):
             return s.create_action(ctx,*arg)
 
         def func(value):
+            print 'TRIGGER FUNCTION',value,value.as_norm()
             if not value.is_null() and value.as_norm()!=0:
                 s.callback(*arg)
 
@@ -515,30 +471,14 @@ class Atom(node.Server):
         self.set_property_string(icon)
 
     def rpc_set_value(self,arg):
-        return self.builtin_set_value(arg)
+        self.builtin_set_value(arg)
 
     def rpc_set_icon(self,arg):
         self.set_icon(arg)
     
-    def rpc_notify_delete(self,arg):
-        self.add_property_termlist('notify',arg)
-
     def close_server(self):
-        if False:
-            if self.open():
-                id=self.id()
-                for agent in self.get_property_termlist('notify'):
-                    rpc.invoke_rpc(agent,'deleted',logic.render_term(id))
-
         self.__policy.close()
         node.Server.close_server(self)
-
-    def notify_destroy(self):
-        for slave in self.get_property_termlist('slave'):
-            rpc.invoke_async_rpc(slave,'source_gone',self.id())
-
-        for (k,v) in self.iteritems():
-            v.notify_destroy()
 
     def rpc_download(self,arg):
         (cookie,start,length) = logic.parse_clause(arg)
@@ -669,7 +609,8 @@ class Atom(node.Server):
         n = self.get_property_string('name',None)
         if not n: return ''
         if not o: return n
-        return "%s %d" % (n,o)
+        d = "%s %d" % (n,o)
+        return d
 
     def get_domain(self):
         return domain.traits(self.get_property_string('domain'))
@@ -677,22 +618,22 @@ class Atom(node.Server):
     def add_connection(self,src):
         old = self.get_property_termlist('master')
         self.add_property_termlist('master',src)
-        self.__update_listeners(old)
+        self.update_slaves(old)
 
     def set_connections(self,srcs):
         old = self.get_property_termlist('master')
         self.set_property_string('master',srcs)
-        self.__update_listeners(old)
+        self.update_slaves(old)
 
     def clear_connections(self):
         old = self.get_property_termlist('master')
         self.del_property('master')
-        self.__update_listeners(old)
+        self.update_slaves(old)
 
     def remove_connection(self,src):
         old = self.get_property_termlist('master')
         self.del_property_termlist('master',src)
-        self.__update_listeners(old)
+        self.update_slaves(old)
 
     def rpc_connected(self,arg):
         self.add_property_termlist('slave',logic.render_term(arg))
@@ -700,19 +641,34 @@ class Atom(node.Server):
     def rpc_disconnected(self,arg):
         self.del_property_termlist('slave',logic.render_term(arg))
 
-    def __update_listeners(self,old):
+    def set_connection_scope(self,scope):
+        self.__connection_scope = scope
+
+    def notify_destroy(self):
+        print self.id(),'notify destroy'
+        for slave in self.get_property_termlist('slave'):
+            slave = paths.to_absolute(slave,self.__connection_scope)
+            myrid = paths.to_relative(self.id(),scope=paths.id2scope(slave))
+            rpc.invoke_async_rpc(slave,'source_gone',myrid)
+
+        self.clear_connections();
+
+        for (k,v) in self.iteritems():
+            v.notify_destroy()
+
+    def update_slaves(self,old):
         masterids = set([x.args[2] for x in self.get_property_termlist('master')])
         previous = set([x.args[2] for x in old])
         dead_listeners = previous.difference(masterids)
         new_listeners = masterids.difference(previous)
-        print 'adding new listeners',new_listeners
-        print 'removing old listeners',dead_listeners
 
         for id in dead_listeners:
+            id = paths.to_absolute(id,self.__connection_scope)
             myrid = paths.to_relative(self.id(),scope=paths.id2scope(id))
             rpc.invoke_async_rpc(id,'disconnected',myrid)
 
         for id in new_listeners:
+            id = paths.to_absolute(id,self.__connection_scope)
             myrid = paths.to_relative(self.id(),scope=paths.id2scope(id))
             rpc.invoke_async_rpc(id,'connected',myrid)
 
@@ -856,7 +812,9 @@ class FastEvent(Bool):
         return True
 
     def clear(self):
+
         if self.index>0:
+            self.clear_connections()
 
             data = self.data
             ctx = self.ctx

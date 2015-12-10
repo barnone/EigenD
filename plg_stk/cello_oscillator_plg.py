@@ -19,10 +19,9 @@
 #
 
 import piw
-import stk_native
 from pi.logic.shortcuts import T
 from pi import agent,atom,domain,bundles,action,async,utils,upgrade,policy
-from plg_stk import cello_oscillator_version as version
+from . import cello_oscillator_version as version,stk_native
 
 def filtered_policy():
     return policy.LopassStreamPolicy(1000,0.98)
@@ -36,15 +35,12 @@ class Agent(agent.Agent):
 
         self.output = bundles.Splitter(self.domain, self[1])
         self.inst = stk_native.cello(self.output.cookie(),self.domain)
-        self.input = bundles.VectorInput(self.inst.cookie(), self.domain,signals=(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24))
+        self.input = bundles.VectorInput(self.inst.cookie(), self.domain,signals=(2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24))
         
         #self.bow_input = bundles.ScalarInput(self.inst.bow_cookie(), self.domain, signals=(1,2))
 
-        param=(T('inc',0.02),T('biginc',0.2),T('control','updown'))
         self[2] = atom.Atom(names='inputs')
         # playing inputs
-        # bow activation
-        self[2][1] = atom.Atom(names='activation input', domain=domain.BoundedFloat(0,1), policy=self.input.merge_policy(1,False),protocols='nostage')
         # frequency
         self[2][2] = atom.Atom(names='frequency input', domain=domain.BoundedFloat(1,96000), policy=self.input.vector_policy(2,False))
         # bow pressure
@@ -54,14 +50,14 @@ class Agent(agent.Agent):
         # bow velocity
         self[2][5] = atom.Atom(names='bow velocity input', domain=domain.BoundedFloat(-1,1), policy=self.input.merge_nodefault_policy(23,False))
         # pitch sweep time (portomento) for mono mode
-        self[2][6] = atom.Atom(names='pitch time input', domain=domain.BoundedFloat(0,100000,hints=param), init=10, policy=self.input.merge_policy(4,False))
+        self[2][6] = atom.Atom(names='pitch time input', domain=domain.BoundedFloat(0,100000,hints=(T('stageinc',10),T('inc',10),T('biginc',1000),T('control','updown'))), init=10, policy=self.input.merge_policy(4,False))
 
         # TODO: remove
         # bow width
-        #self[2][7] = atom.Atom(names='bow width input', domain=domain.BoundedFloat(0,1,hints=param), init=0, policy=self.input.merge_policy(5,False))
+        #self[2][7] = atom.Atom(names='bow width input', domain=domain.BoundedFloat(0,1), init=0, policy=self.input.merge_policy(5,False))
 
         # minimum frequency limit
-        self[2][8] = atom.Atom(names='minimum frequency', domain=domain.BoundedFloat(0.1,20,hints=param), init=20, policy=self.input.merge_policy(6,False))
+        self[2][8] = atom.Atom(names='minimum frequency', domain=domain.BoundedFloat(0.1,20,hints=(T('stageinc',0.1),T('inc',0.1),T('biginc',0.2),T('control','updown'))), init=20, policy=self.input.merge_policy(6,False))
 
         # TODO: remove
         # string junction mode
@@ -69,15 +65,18 @@ class Agent(agent.Agent):
 
         
         # string to body filter parameters
-        self[2][10] = atom.Atom(names="low filter frequency", domain=domain.BoundedFloat(0,96000), init=400, policy=self.input.merge_policy(8,False))
-        self[2][11] = atom.Atom(names="low filter gain", domain=domain.BoundedFloat(-96,24), init=0, policy=self.input.merge_policy(9,False))
-        self[2][12] = atom.Atom(names="low filter width", domain=domain.BoundedFloat(0.01,100,1), init=1, policy=self.input.merge_policy(10,False))
-        self[2][13] = atom.Atom(names="mid filter frequency", domain=domain.BoundedFloat(0,96000), init=1000, policy=self.input.merge_policy(11,False))
-        self[2][14] = atom.Atom(names="mid filter gain", domain=domain.BoundedFloat(-96,24), init=-24, policy=self.input.merge_policy(12,False))
-        self[2][15] = atom.Atom(names="mid filter width", domain=domain.BoundedFloat(0.01,100,1), init=1, policy=self.input.merge_policy(13,False))
-        self[2][16] = atom.Atom(names="high filter frequency", domain=domain.BoundedFloat(0,96000), init=10000, policy=self.input.merge_policy(14,False))
-        self[2][17] = atom.Atom(names="high filter gain", domain=domain.BoundedFloat(-96,24), init=-40, policy=self.input.merge_policy(15,False))
-        self[2][18] = atom.Atom(names="high filter width", domain=domain.BoundedFloat(0.01,100,1), init=1, policy=self.input.merge_policy(16,False))
+        fh=(T('stageinc',100),T('inc',100),T('biginc',10000),T('control','updown'))
+        gh=(T('stageinc',1),T('inc',1),T('biginc',10),T('control','updown'))
+        wh=(T('stageinc',1),T('inc',1),T('biginc',10),T('control','updown'))
+        self[2][10] = atom.Atom(names="low filter frequency", domain=domain.BoundedFloat(0,96000,hints=fh), init=400, policy=self.input.merge_policy(8,False))
+        self[2][11] = atom.Atom(names="low filter gain", domain=domain.BoundedFloat(-96,24,hints=gh), init=0, policy=self.input.merge_policy(9,False))
+        self[2][12] = atom.Atom(names="low filter width", domain=domain.BoundedFloat(0.01,100,1,hints=wh), init=1, policy=self.input.merge_policy(10,False))
+        self[2][13] = atom.Atom(names="mid filter frequency", domain=domain.BoundedFloat(0,96000,hints=fh), init=1000, policy=self.input.merge_policy(11,False))
+        self[2][14] = atom.Atom(names="mid filter gain", domain=domain.BoundedFloat(-96,24,hints=gh), init=-24, policy=self.input.merge_policy(12,False))
+        self[2][15] = atom.Atom(names="mid filter width", domain=domain.BoundedFloat(0.01,100,1,hints=wh), init=1, policy=self.input.merge_policy(13,False))
+        self[2][16] = atom.Atom(names="high filter frequency", domain=domain.BoundedFloat(0,96000,hints=fh), init=10000, policy=self.input.merge_policy(14,False))
+        self[2][17] = atom.Atom(names="high filter gain", domain=domain.BoundedFloat(-96,24,hints=gh), init=-40, policy=self.input.merge_policy(15,False))
+        self[2][18] = atom.Atom(names="high filter width", domain=domain.BoundedFloat(0.01,100,1,hints=wh), init=1, policy=self.input.merge_policy(16,False))
 
         # string filter parameters
         # TODO: remove
@@ -92,7 +91,7 @@ class Agent(agent.Agent):
 
 
         # velocity factor, determines velocity of bow from position difference
-        self[2][23] = atom.Atom(names='bow velocity factor', domain=domain.BoundedFloat(0,100,1), init=1, policy=self.input.merge_policy(21,False))
+        self[2][23] = atom.Atom(names='bow velocity factor', domain=domain.BoundedFloat(0,100,1,hints=(T('stageinc',1),T('inc',1),T('biginc',10),T('control','updown'))), init=1, policy=self.input.merge_policy(21,False))
 
 #        self[2][70] = atom.Atom(names='parameter number', domain=domain.BoundedInt(0,10), policy=atom.default_policy(self.__set_param_num))
 #        self[2][71] = atom.Atom(names='parameter value', domain=domain.BoundedFloat(-100,100), policy=atom.default_policy(self.__set_param_val))

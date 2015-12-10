@@ -47,10 +47,19 @@ namespace host
 
             std::string name() const         { return std::string(desc_.name.getCharPointer()); }
             std::string format() const       { return std::string(desc_.pluginFormatName.getCharPointer()); }
+            std::string category() const     { return std::string(desc_.category.getCharPointer()); }
             std::string manufacturer() const { return std::string(desc_.manufacturerName.getCharPointer()); }
             std::string version() const      { return std::string(desc_.version.getCharPointer()); }
             std::string id() const           { return std::string(desc_.fileOrIdentifier.getCharPointer()); }
-            std::string description() const  { return name()+" "+format()+" from "+manufacturer(); }
+            std::string description() const
+            {
+                std::string cat = category();
+                if(cat.length())
+                {
+                    cat = " "+cat;
+                }
+                return name()+" "+format()+cat+" from "+manufacturer();
+            }
 
             bool from_xml(const std::string &xml)
             {
@@ -95,31 +104,32 @@ namespace host
             impl_t *impl_;
     };
 
-    class PIHOST_DECLSPEC_CLASS plugin_observer_t
+    class PIHOST_DECLSPEC_CLASS plugin_observer_t: virtual public pic::tracked_t
     {
         public:
-            virtual ~plugin_observer_t() {}
+            virtual ~plugin_observer_t() {tracked_invalidate(); }
             virtual void description_changed(const std::string &) = 0;
             virtual void showing_changed(bool) = 0;
             virtual void bypassed_changed(bool) = 0;
             virtual void mapping_changed(const std::string &) = 0;
+            virtual void settings_changed() = 0;
             virtual std::string get_parameter_name(unsigned) = 0;
     };
 
     class PIHOST_DECLSPEC_CLASS plugin_instance_t: public pic::nocopy_t
     {
         public:
-            plugin_instance_t(plugin_observer_t *, midi::midi_channel_delegate_t *,
+            plugin_instance_t(plugin_observer_t *,
                 piw::clockdomain_ctl_t *, const piw::cookie_t &audio_out, const piw::cookie_t &midi_out,
                 const pic::status_t &window_state_changed);
             ~plugin_instance_t();
 
             piw::clockdomain_ctl_t *clock_domain();
 
-            piw::cookie_t metronome_input();
-            piw::cookie_t midi_from_belcanto();
-            piw::cookie_t midi_aggregator();
-            piw::cookie_t audio_input();
+            piw::cookie_t metronome_input_cookie();
+            piw::cookie_t midi_from_belcanto_cookie();
+            piw::cookie_t midi_aggregator_cookie();
+            piw::cookie_t audio_input_cookie();
 
             void set_midi_channel(unsigned);
             void set_min_midi_channel(unsigned);
@@ -131,7 +141,7 @@ namespace host
             void set_cc(unsigned, unsigned);
             piw::change_nb_t change_cc();
 
-            piw::cookie_t parameter_input(unsigned);
+            piw::cookie_t parameter_input_cookie(unsigned);
             void set_mapping(const std::string &);
             std::string get_mapping();
             void parameter_name_changed(unsigned);
@@ -143,6 +153,7 @@ namespace host
             bool is_mapped_midi(unsigned, unsigned short);
             midi::mapping_info_t get_info_param(unsigned, unsigned short);
             midi::mapping_info_t get_info_midi(unsigned, unsigned short);
+            midi::global_settings_t get_settings();
             void clear_params();
             void clear_midi_cc();
             void clear_midi_behaviour();
@@ -150,6 +161,11 @@ namespace host
             void set_midi_notes(bool);
             void set_midi_pitchbend(bool);
             void set_midi_hires_velocity(bool);
+            void set_velocity_samples(unsigned);
+            void set_velocity_curve(float);
+            void set_velocity_scale(float);
+            void set_pitchbend_up(float semis);
+            void set_pitchbend_down(float semis);
 
             bool open(const plugin_description_t &);
             void close();
@@ -171,7 +187,7 @@ namespace host
             void set_bounds(const piw::data_t &);
 
             void set_idle_time(float tt);
-            void disable_idling();
+            void enable_idling(bool v);
 
             int gc_clear();
             int gc_traverse(void *,void *);
@@ -180,6 +196,8 @@ namespace host
         private:
             impl_t *impl_;
     };
+
+    PIHOST_DECLSPEC_FUNC(bool) delete_plugin(void *);
 }
 
 #endif

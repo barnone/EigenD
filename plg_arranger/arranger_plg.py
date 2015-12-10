@@ -19,10 +19,9 @@
 #
 
 from pi import agent,atom,bundles,domain,errors,policy,utils,action,const,node,upgrade,logic,async,collection,talker
-from plg_arranger import arranger_version as version
-
+from pi.logic.shortcuts import T
+from . import arranger_version as version,arranger_native
 import piw
-import arranger_native
 
 class RowTargetEvent(talker.Talker):
     def __init__(self,target,fast,index):
@@ -31,7 +30,7 @@ class RowTargetEvent(talker.Talker):
 
         talker.Talker.__init__(self,self.__target.agent.finder,fast,None,ordinal=index,protocols='remove')
 
-    def property_change(self,key,value):
+    def property_change(self,key,value,delegate):
         if key=='help' and value and value.is_string():
             self.__target.agent.update()
 
@@ -42,7 +41,7 @@ class RowTarget(collection.Collection):
     def __init__(self,agent,index):
         self.agent = agent
         self.__fastdata = bundles.FastSender()
-        collection.Collection.__init__(self,domain=domain.Aniso(),policy=policy.FastReadOnlyPolicy(),creator=self.__create,wrecker=self.__wreck,ordinal=index,names='row',protocols='hidden-connection remove')
+        collection.Collection.__init__(self,domain=domain.Aniso(),policy=policy.FastReadOnlyPolicy(),creator=self.__create,wrecker=self.__wreck,ordinal=index,names='row',protocols='hidden-connection remove explicit')
         self.get_policy().set_source(self.__fastdata)
         self.get_policy().set_clock(self.agent.model.get_clock())
 
@@ -69,6 +68,9 @@ class RowTarget(collection.Collection):
 
     def __wreck(self,k,v):
         self.agent.update()
+
+    def rpc_instancename(self,a):
+        return 'action'
 
     @async.coroutine('internal error')
     def instance_create(self,name):
@@ -223,7 +225,7 @@ class Parameters(atom.Atom):
         self[5] = atom.Atom(names="position",container=(None,'position',self.__agent.verb_container()),protocols='set')
         self[5].add_verb2(1,'set([],~a,role(None,[instance(~self)]),role(to,[numeric]))',create_action=self.__position_create,clock=True)
 
-        self[6] = atom.Atom(domain=domain.BoundedFloat(0.5,20),init=0.5,names='doubletap',policy=atom.default_policy(self.__doubletap_change))
+        self[6] = atom.Atom(domain=domain.BoundedFloat(0.5,20,hints=(T('stageinc',0.1),T('inc',0.1),T('biginc',1),T('control','updown'))),init=0.5,names='doubletap',policy=atom.default_policy(self.__doubletap_change))
         self.__agent.view.doubletap_set(piw.make_change_nb(utils.slowchange(self.__doubletap_set)))
 
     def __start_change(self,v):
@@ -338,7 +340,7 @@ class Agent(agent.Agent):
         self[4][1] = atom.Atom(domain=domain.Aniso(), policy=self.cinput.nodefault_policy(1,False),names='song beat input')
         self[4][2] = atom.Atom(domain=domain.Aniso(), policy=self.cinput.nodefault_policy(2,False),names='running input')
 
-        self[5] = collection.Collection(creator=self.__createtarget,wrecker=self.__wrecktarget,names="row",inst_creator=self.__createtarget_inst,inst_wrecker=self.__wrecktarget_inst,protocols='hidden-connection')
+        self[5] = collection.Collection(creator=self.__createtarget,wrecker=self.__wrecktarget,names="row",inst_creator=self.__createtarget_inst,inst_wrecker=self.__wrecktarget_inst,protocols='hidden-connection explicit')
 
         self[7] = Parameters(self)
 
@@ -350,9 +352,9 @@ class Agent(agent.Agent):
 
         self.add_verb2(1,'play([],None)',create_action=self.__play,clock=True)
         self.add_verb2(2,'play([un],None)',create_action=self.__unplay,clock=True)
-        self.add_verb2(3,'cancel([],None,role(None,[numeric,singular]),option(called,[singular,numeric]))',self.__cancel_verb)
+        self.add_verb2(3,'cancel([],None,role(None,[numeric]),option(called,[numeric]))',self.__cancel_verb)
         self.add_verb2(4,'clear([],None)',self.__clear_verb)
-        self.add_verb2(5,'do([],None,role(None,[abstract]),role(when,[singular,numeric]),option(called,[singular,numeric]))', self.__do_verb)
+        self.add_verb2(5,'do([],None,role(None,[abstract]),role(when,[numeric]),option(called,[numeric]))', self.__do_verb)
         self.model.playstop_set(piw.make_change_nb(utils.slowchange(self.__play_set)))
 
     def __play(self,*args):
@@ -431,8 +433,11 @@ class Agent(agent.Agent):
             del self[5][row]
             yield async.Coroutine.success()
 
-    def __clear_verb(self,subj):
+    def __clear_verb(self,subj=None):
         self.view.clear_events()
+
+    def agent_preload(self,filename):
+        self.__clear_verb()
 
     def update(self):
         pass

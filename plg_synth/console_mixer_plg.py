@@ -30,17 +30,13 @@ import piw
 import picross
 from pi import agent,atom,bundles,domain,async,action,upgrade,policy,node,container,utils,logic,const,errors,collection
 from pi.logic.shortcuts import T
-from plg_synth import console_mixer_version as version
-import synth_native
+from . import console_mixer_version as version,synth_native
 
 num_inputs = 24
-db_range = 70
 
-def volume_function(f):
-    if f<=0.01: return 0.0
-    fn = f/100.0
-    db = db_range*(1.0-fn)
-    sc = pow(10.0,-db/20.0)
+def volume_function(db):
+    if db<=-70: return 0.0
+    sc = pow(10.0,db/20.0)
     return sc
 
 
@@ -53,7 +49,7 @@ pan_laws = {
     'linear': lambda f: (f+1.0)/2.0,
 }
 
-default_pan = 'linear'
+default_pan = 'equal power sine'
 
 response_size = 1200
 
@@ -75,31 +71,37 @@ def render_list(list,offset,renderer):
 
 class FxSendControls(atom.Atom):
     
-    def __init__(self, channel, cookie, name, ordinal_str, fx_chan_num, is_fx_chan):
+    def __init__(self, channel, fx_chan_num, is_fx_chan):
         self.channel = channel
         self.fx_chan_num = fx_chan_num
         self.__is_fx_chan = is_fx_chan
 
-        if ordinal_str!='':
-            ordinal = int(ordinal_str)
-            if not ordinal:
-                ordinal = None
-        else:
-            ordinal = None
+        atom.Atom.__init__(self, names='effect', ordinal=fx_chan_num)
 
-        self.label = '%s %s' % (name,ordinal_str)
-        atom.Atom.__init__(self, names=name, ordinal=ordinal)
-
-        self.set_property_string('cname','effect')
-        self.set_property_long('cordinal',fx_chan_num)
+        cookie = channel.aggregator.get_output(2+fx_chan_num)
 
         # ------- effect send levels and enables ------- 
         # enable
         self[1] = atom.Atom(domain=domain.Bool(), init=False, names='enable', policy=atom.default_policy(self.__set_fx_send_enable))
         # send
         self.send_input = bundles.ScalarInput(cookie,channel.main_agent.clk,signals=(1,))
-        self[2] = atom.Atom(domain=domain.BoundedFloat(0,120,hints=(T('inc',1),T('biginc',10),T('control','updown'))), init=100, names='send', policy=self.send_input.notify_policy(1,policy.LopassStreamPolicy(1000,0.97),notify=self.channel.main_agent.changes_pending), protocols='bind input')
+        self[2] = atom.Atom(domain=domain.BoundedFloat(-70,14,hints=(T('stageinc',0.1),T('inc',1),T('biginc',10),T('control','updown'),T('distribution','tapered'))),
+                init=0, names='send',
+                policy=self.send_input.notify_policy(1,policy.LopassStreamPolicy(1000,0.97),notify=self.channel.main_agent.changes_pending), protocols='bind input')
         self[3] = atom.Atom(domain=domain.Bool(), init=False, names='prefader', policy=atom.default_policy(self.__set_fx_send_prefader))
+
+    def property_veto(self,key,value):
+        if atom.Atom.property_veto(self,key,value):
+            return True
+
+        return key in ['name','ordinal']
+
+    def update_name(self,name,ordinal):
+        self.set_property_string('name',name,allow_veto=False)
+        self.set_property_long('ordinal',ordinal,allow_veto=False)
+
+    def disconnect(self):
+        self.channel.aggregator.clear_output(2+self.fx_chan_num)
 
     def __set_fx_send_enable(self, value):
         self.channel.main_agent.mixer.set_fx_send_enable(value, self.channel.get_chan_num()-1, self.fx_chan_num-1, self.__is_fx_chan)
@@ -157,13 +159,14 @@ class FxChannel(atom.Atom):
 
         self.aggregator = piw.aggregator(input_cookie,main_agent.clk)
 
-        self.__label = ''
-        self.set_private(node.server(change=self.__setlabel,value=piw.makestring(self.__label,0)))
-
         self.control_input = bundles.ScalarInput(self.aggregator.get_output(1),main_agent.clk,signals=(1,2))        
         self[4] = atom.Atom(names='controls')
-        self[4][1] = atom.Atom(domain=domain.BoundedFloat(0,120,hints=(T('inc',1),T('biginc',10),T('control','updown'))), init=100, names='volume', policy=self.control_input.notify_policy(1,policy.LopassStreamPolicy(1000,0.97),notify=main_agent.changes_pending), protocols='bind input')
-        self[4][2] = atom.Atom(domain=domain.BoundedFloat(-1,1,hints=(T('inc',0.02),T('biginc',0.2),T('control','updown'))), init=0, names='pan', policy=self.control_input.notify_policy(2,policy.LopassStreamPolicy(1000,0.97),notify=main_agent.changes_pending), protocols='bind input')
+        self[4][1] = atom.Atom(domain=domain.BoundedFloat(-70,14,hints=(T('stageinc',0.1),T('inc',1),T('biginc',10),T('control','updown'),T('distribution','tapered'))),
+                init=0, names='volume',
+                policy=self.control_input.notify_policy(1,policy.LopassStreamPolicy(1000,0.97),notify=main_agent.changes_pending), protocols='bind input')
+        self[4][2] = atom.Atom(domain=domain.BoundedFloat(-1,1,hints=(T('stageinc',0.1),T('inc',0.02),T('biginc',0.2),T('control','updown'))),
+                init=0, names='pan',
+                policy=self.control_input.notify_policy(2,policy.LopassStreamPolicy(1000,0.97),notify=main_agent.changes_pending), protocols='bind input')
                 
         # audio return input
         self.return_input = bundles.VectorInput(self.aggregator.get_output(2),main_agent.clk,signals=(1,2))
@@ -173,25 +176,11 @@ class FxChannel(atom.Atom):
         # fx send controls
         self[5] = FxSendControlsList()
 
-        self.set_id_data(None, None, str(fx_chan_num))
-
-    def __setlabel(self,label):
-        if label.is_string():
-            self.set_label(label.as_string())
-
-    def set_label(self,label):
-        self.get_private().set_data(piw.makestring(label,0))
-        self.__label = label
-        self.main_agent.changes_pending()
-
     def inuse(self):
         return self[1].is_connected() or self[2].is_connected()
 
     def get_cinfo(self):
-        if not self.__label:
-            l = '%s %s' % (self.name,self.ordinal_str)
-        else:
-            l = self.__label
+        l = self.get_description()
         return l+' fx'
 
     def __listener(self,veto,key,value):
@@ -208,6 +197,16 @@ class FxChannel(atom.Atom):
         v = '%d' % self[4][1].get_value()
         return [(self.get_cinfo()+' volume',v)]
 
+    def property_change(self,k,v,delegate):
+        if k in [ 'name','ordinal' ]:
+            for k,v in self.main_agent.channels.iteritems():
+                v.update_fx_send_controls(self.fx_chan_num)
+
+            for k,v in self.main_agent.fxchannels.iteritems():
+                if k!=self.fx_chan_num:
+                    v.update_fx_send_controls(self.fx_chan_num)
+            
+
     def get_dinfo_status(self):
         label = self.get_cinfo()
         l=[]
@@ -223,55 +222,46 @@ class FxChannel(atom.Atom):
         return logic.render_term(T('keyval',tuple(l)))
 
     def disconnect(self):
-        # remove send controls from input channels
-        for k in self.main_agent.channels.iterkeys():
-            self.main_agent.channels[k].remove_fx_send_ctrls(self.fx_chan_num)
-        # remove send controls from fx channels
-        for k in self.main_agent.fxchannels.iterkeys():
+        for k,v in self.main_agent.channels.iteritems():
+            v.remove_fx_send_ctrls(self.fx_chan_num)
+
+        for k,v in self.main_agent.fxchannels.iteritems():
             if k!=self.fx_chan_num:
-                self.main_agent.fxchannels[k].remove_fx_send_ctrls(self.fx_chan_num)
+                v.remove_fx_send_ctrls(self.fx_chan_num)
 
         self.main_agent.mixer.remove_fx_channel(self.fx_chan_num-1)
 
         self.main_agent.changes_pending()
         
-    def add_fx_send_ctrls(self, key, name, ordinal, index):
-        # add new atom with signals to the effects channel
-        self[5][index] = FxSendControls(self, self.aggregator.get_output(2+index), name, ordinal, index, True)
+    def add_fx_send_ctrls(self, index):
+        self[5][index] = FxSendControls(self, index, True)
+        self.update_fx_send_controls(index)
+
+    def update_fx_send_controls(self, index):
+        if index != self.fx_chan_num:
+            c = self.main_agent.fxchannels[index]
+            o = c.get_property_long('ordinal',None)
+            n = c.get_property_string('name',None)
+            self[5][index].update_name(n,o)
+            self.main_agent.changes_pending()
 
     def remove_fx_send_ctrls(self, index):
-        self.aggregator.clear_output(2+index)
+        self[5][index].disconnect()
         del self[5][index]
+
+    def plumb_fx_send_ctrls(self):
+        for k,v in self.main_agent.channels.iteritems():
+            v.add_fx_send_ctrls(self.fx_chan_num)
+
+        for k,v in self.main_agent.fxchannels.iteritems():
+            if k!=self.fx_chan_num:
+                v.add_fx_send_ctrls(self.fx_chan_num)
+                self.add_fx_send_ctrls(k)
+
+        self.main_agent.changes_pending()
 
     def get_chan_num(self):
         return self.fx_chan_num
-
-    def set_id_data(self, key, name, ordinal_str):
-        if not name:
-            name = ''
-
-        if not key:
-            if len(name) > 0:
-                key = name+' '+ordinal_str
-            else:
-                key = ordinal_str
-
-        self.key = key
-        self.name = name
-        self.ordinal_str = ordinal_str
-
-        if len(name) > 0:
-            self.set_names('effect '+name)
-        else:
-            self.set_names('effect')
-
-        if ordinal_str!='':
-            ordinal = int(ordinal_str)
-            if ordinal:
-                self.set_ordinal(ordinal)
-
-    def get_id_data(self):
-        return (self.key, self.name, self.ordinal_str, self.fx_chan_num)
 
 # -------------------------------------------------------------------------------------------------------------------------------------------
 # Effects send channel list
@@ -292,62 +282,21 @@ class FxChannelList(collection.Collection):
 
     def __create_fxchannel(self, index):
         channel = FxChannel(self.__agent,index)
-        self.__connect_fxchannel(channel)
+        self[index] = channel
+        channel.plumb_fx_send_ctrls()
         return channel
     
     def __wreck_fxchannel(self, index, node):
         node.disconnect()
 
-    def create_fxchannel(self,o=None):
-        o = o or self.find_hole()
-        e = FxChannel(self.__agent,o)
-        self[o] = e
-
-        self.__connect_fxchannel(e)
-
-        return e
-
-    def create_named_fxchannel(self,key):
-        # get list of strings
-        key_words = key.split()
-        # name can be anything, but check for an integer in last element and handle it like an ordinal
-        last = key_words[len(key_words)-1]
-        if last.isdigit():
-            # strip off ordinal
-            name = ' '.join(key_words[:len(key_words)-1])
-            ordinal = last
-        else:
-            name = key
-            ordinal = ''
-
+    def create_named_fxchannel(self,name,ordinal):
         o = self.find_hole()
         e = FxChannel(self.__agent,o)
         self[o] = e
-
-        # set id data - the key(=name+ordinal), name and ordinal
-        e.set_id_data(key, name, ordinal)
-
-        self.__connect_fxchannel(e)
-
+        e.plumb_fx_send_ctrls()
+        e.set_ordinal(ordinal)
+        e.set_names(name)
         return e
-
-    def __connect_fxchannel(self,channel):
-        (key, name, ordinal, index) = channel.get_id_data()
-
-        # add new fx chan to all other input chans
-        for k in self.__agent.channels.iterkeys():
-            self.__agent.channels[k].add_fx_send_ctrls(key, name, ordinal, index)
-
-        # add new fx chan to all other fx chans and vice versa
-        for k in self.iterkeys():
-            if k!=index:
-                self[k].add_fx_send_ctrls(key, name, ordinal, index)
-                # get data of other channels
-                (key2, name2, ordinal2, index2) = self[k].get_id_data()
-                # add to this channel
-                channel.add_fx_send_ctrls(key2, name2, ordinal2, index2)
-
-        self.__agent.changes_pending()
 
     def del_fxchannel(self,index):
         v = self[index]
@@ -356,7 +305,11 @@ class FxChannelList(collection.Collection):
     
     @async.coroutine('internal error')
     def __create_inst(self,ordinal=None):
-        e=self.create_fxchannel(ordinal)
+        o = self.find_hole()
+        e = FxChannel(self.__agent,o)
+        self[o] = e
+        e.plumb_fx_send_ctrls()
+        e.set_ordinal(int(ordinal))
         yield async.Coroutine.success(e)
 
     @async.coroutine('internal error')
@@ -379,36 +332,25 @@ class Channel(atom.Atom):
         self.control_input = bundles.ScalarInput(self.aggregator.get_output(1),main_agent.clk,signals=(1,2))        
         self.audio_input = bundles.VectorInput(self.aggregator.get_output(2),main_agent.clk,signals=(1,2))
 
-        self.__label = ''
-        self.set_private(node.server(change=self.__setlabel,value=piw.makestring(self.__label,0)))
-        
         self[1] = atom.Atom(domain=domain.BoundedFloat(-1,1), init=0, names='left audio input', policy=self.audio_input.vector_policy(1,True), protocols='obm')
         self[2] = atom.Atom(domain=domain.BoundedFloat(-1,1), init=0, names='right audio input', policy=self.audio_input.vector_policy(2,True), protocols='obm')
 
         self[3] = atom.Atom(names='controls')
-        self[3][1] = atom.Atom(domain=domain.BoundedFloat(0,120,hints=(T('inc',1),T('biginc',10),T('control','updown'))), init=100, names='volume', policy=self.control_input.notify_policy(1,policy.LopassStreamPolicy(1000,0.97),notify=main_agent.changes_pending), protocols='bind input')
-        self[3][2] = atom.Atom(domain=domain.BoundedFloat(-1,1,hints=(T('inc',0.02),T('biginc',0.2),T('control','updown'))), init=0, names='pan', policy=self.control_input.notify_policy(2,policy.LopassStreamPolicy(1000,0.97),notify=main_agent.changes_pending), protocols='bind input')
+        self[3][1] = atom.Atom(domain=domain.BoundedFloat(-70,14,hints=(T('stageinc',0.1),T('inc',1),T('biginc',10),T('control','updown'),T('distribution','tapered'))),
+                init=0, names='volume',
+                policy=self.control_input.notify_policy(1,policy.LopassStreamPolicy(1000,0.97),notify=main_agent.changes_pending), protocols='bind input')
+        self[3][2] = atom.Atom(domain=domain.BoundedFloat(-1,1,hints=(T('stageinc',0.1),T('inc',0.02),T('biginc',0.2),T('control','updown'))),
+                init=0, names='pan',
+                policy=self.control_input.notify_policy(2,policy.LopassStreamPolicy(1000,0.97),notify=main_agent.changes_pending), protocols='bind input')
 
         # fx send controls
         self[4] = FxSendControlsList()
-
-    def __setlabel(self,label):
-        if label.is_string():
-            self.set_label(label.as_string())
-
-    def set_label(self,label):
-        self.get_private().set_data(piw.makestring(label,0))
-        self.__label = label
-        self.main_agent.changes_pending()
 
     def inuse(self):
         return self[1].is_connected() or self[2].is_connected()
 
     def get_cinfo(self):
-        if not self.__label:
-            l = 'channel %d' % self.chan_num
-        else:
-            l = self.__label
+        l = self.get_description()
         return l
 
     def get_dinfo_pan(self):
@@ -441,12 +383,19 @@ class Channel(atom.Atom):
 
         self.main_agent.changes_pending()
 
-    def add_fx_send_ctrls(self, key, name, ordinal, index):
+    def add_fx_send_ctrls(self, index):
         # add new atom with signals to the effects channel
-        self[4][index] = FxSendControls(self, self.aggregator.get_output(2+index), name, ordinal, index, False)
+        self[4][index] = FxSendControls(self, index, False)
+
+    def update_fx_send_controls(self, index):
+        c = self.main_agent.fxchannels[index]
+        o = c.get_property_long('ordinal',None)
+        n = c.get_property_string('name',None)
+        self[4][index].update_name(n,o)
+        self.main_agent.changes_pending()
 
     def remove_fx_send_ctrls(self, index):
-        self.aggregator.clear_output(2+index)
+        self[4][index].disconnect()
         del self[4][index]
 
     def get_chan_num(self):
@@ -490,14 +439,14 @@ class Agent(agent.Agent):
 
     def __init__(self, address, ordinal):
         # self[3] is the verb container
-        agent.Agent.__init__(self, signature=version, names='console mixer', protocols='inputlist has_subsys browse', container=3,ordinal=ordinal)
+        agent.Agent.__init__(self, signature=version, names='console mixer', protocols='inputlist has_subsys oldbrowse', ordinal=ordinal)
 
         self.clk = piw.clockdomain_ctl()
 
         pan_function = pan_laws[default_pan]
 
         # make vol and pan tables
-        self.vol = piw.make_f2f_table(0,120,1000,picross.make_f2f_functor(volume_function))
+        self.vol = piw.make_f2f_table(-70,14,1000,picross.make_f2f_functor(volume_function))
         self.pan = piw.make_f2f_table(-1,1,1000,picross.make_f2f_functor(pan_function))
 
         self[1] = atom.Atom(names='outputs')
@@ -507,16 +456,15 @@ class Agent(agent.Agent):
 
         self.mixer = piw.consolemixer(self.vol,self.pan,self.clk,self.output.cookie())
 
-        sh=(T('choices',*pan_laws.keys()), T('control','selector'))
-        self[10] = atom.Atom(names='pan curve',domain=domain.String(hints=sh),init='default',policy=atom.default_policy(self.__set_pan))
+        self[10] = atom.Atom(names='pan curve',domain=domain.StringEnum(*sorted(pan_laws.keys())),init=default_pan,policy=atom.default_policy(self.__set_pan))
 
         self.master_controls_input = bundles.ScalarInput(self.mixer.master_controls_cookie(),self.clk,signals=(1,2))
 
         self[2] = atom.Atom(names='master')
-        self[2][1] = atom.Atom(domain=domain.BoundedFloat(0,120,hints=(T('inc',1),T('biginc',10),T('control','updown'))),
-                            init=100, names='master volume',
+        self[2][1] = atom.Atom(domain=domain.BoundedFloat(-70,14,hints=(T('stageinc',0.1),T('inc',1),T('biginc',10),T('control','updown'),T('distribution','tapered'))),
+                            init=0, names='master volume',
                             policy=self.master_controls_input.notify_policy(1,policy.LopassStreamPolicy(100,0.97),notify=self.changes_pending))
-        self[2][2] = atom.Atom(domain=domain.BoundedFloat(-1,1,hints=(T('inc',0.02),T('biginc',0.2),T('control','updown'))),
+        self[2][2] = atom.Atom(domain=domain.BoundedFloat(-1,1,hints=(T('stageinc',0.1),T('inc',0.02),T('biginc',0.2),T('control','updown'))),
                             init=0, names='master pan',
                             policy=self.master_controls_input.policy(2,policy.LopassStreamPolicy(100,0.97)))
 
@@ -532,14 +480,9 @@ class Agent(agent.Agent):
             
         # verbs
         # verb to create a named effect channel
-        self.add_verb2(1,'create([],None,role(None,[abstract,matches([effect])]), role(called,[abstract]))',self.__create_named_fx_chan)
-        self.add_verb2(2,'create([un],None,role(None,[abstract,matches([effect])]), role(called,[abstract]))',self.__uncreate_named_fx_chan)
+        self.add_verb2(1,'create([],None,role(None,[abstract,matches([effect])]), option(called,[abstract]))',self.__create_fx_chan)
+        self.add_verb2(2,'create([un],None,role(None,[concrete,singular,partof(~(a)#4)]))', self.__uncreate_fx_chan)
 
-        self.add_verb2(3,'label([],None,role(None,[mass([channel])]),role(to,[abstract]))', self.__label)
-        self.add_verb2(4,'label([un],None,role(None,[mass([channel])]))', self.__unlabel)
-        self.add_verb2(5,'label([],None,role(None,[mass([effect])]),role(to,[abstract]))', self.__labelfx)
-        self.add_verb2(6,'label([un],None,role(None,[mass([effect])]))', self.__unlabelfx)
-        
         self.__timestamp = piw.tsd_time()
         self.__selected=None
 
@@ -560,32 +503,6 @@ class Agent(agent.Agent):
 
     def changes_pending(self):
         self.__pending = True
-
-    def __labelfx(self,subj,channel,label):
-        channel = int(action.mass_quantity(channel))
-        label = action.abstract_string(label)
-        if channel in self.fxchannels:
-            self.fxchannels[channel].set_label(label)
-        self.changes_pending()
-
-    def __unlabelfx(self,subj,channel):
-        channel = action.mass_quantity(channel)
-        if channel in self.fxchannels:
-            self.fxchannels[channel].set_label('')
-        self.changes_pending()
-
-    def __label(self,subj,channel,label):
-        channel = int(action.mass_quantity(channel))-1
-        label = action.abstract_string(label)
-        if channel in self.channels:
-            self.channels[channel].set_label(label)
-        self.changes_pending()
-
-    def __unlabel(self,subj,channel):
-        channel = action.mass_quantity(channel)-1
-        if channel in self.channels:
-            self.channels[channel].set_label('')
-        self.changes_pending()
 
     def update(self):
         if self.__pending:
@@ -698,44 +615,87 @@ class Agent(agent.Agent):
         return logic.render_term(('',''))
 
 
-    def rpc_addinput(self,dummy):
-        for (k,v) in self.iter_subsys_items():
-            if not v.inuse():
-                return async.success(action.marshal((v.id(),False)))
+    def __create_fx_chan(self,subject,dummy,tags):
+        name = 'effect'
+        ordinal = 0
 
-        return async.failure('no free mixer channels')
+        if tags:
+            name_words = action.abstract_string(tags).split()
+            last = name_words[len(name_words)-1]
 
-    def rpc_delinput(self,id):
-        for (k,v) in self.iter_subsys_items():
-            if id=='' or v.id()==id:
-                v.disconnect()
+            if last.isdigit():
+                ordinal = int(last)
+                if name_words:
+                    name = ' '.join(name_words[:len(name_words)-1])
+            else:
+                name = ' '.join(name_words)
+        else:
+            ordinal = self.fxchannels.freeinstance()
+            
 
-    def rpc_lstinput(self,dummy):
-        r=tuple([s.id() for (k,s) in self.iter_subsys_items() if s.inuse()])
-        return async.success(action.marshal(r))
+        if False:
+            return async.failure('Console Mixer: effect channel %s already exists' % key)
 
-
-    def __create_named_fx_chan(self,subject,dummy,tags):
-        key = action.abstract_string(tags)
-
-        for v in self.fxchannels.itervalues():
-            if key == v.get_id_data()[0]:
-                return async.failure('Console Mixer: effect channel %s already exists' % key)
-
-        new_fx_chan = self.fxchannels.create_named_fxchannel(key)
-
+        new_fx_chan = self.fxchannels.create_named_fxchannel(name,ordinal)
         return action.concrete_return(new_fx_chan.id())
 
-    def __uncreate_named_fx_chan(self,subject,dummy,tags):
-        key = action.abstract_string(tags)
+    def __uncreate_fx_chan(self,subject,chan):
+        a = action.concrete_object(chan)
 
         for k,v in self.fxchannels.iteritems():
-            if key == v.get_id_data()[0]:
+            if v.id() == a:
                 self.fxchannels.del_fxchannel(k)
-                break
+                return
         
+        return async.failure('Console Mixer: effect channel doesnt exist')
 
 
-agent.main(Agent)
+class Upgrader(upgrade.Upgrader):
+    def vol2db(self,vol):
+        return -70.0*(1.0-(vol/100.0))
+
+    def upgrade_1_0_1_to_1_0_2(self,tools,address):
+        print 'upgrading console mixer',address
+
+        # master volume
+        root = tools.get_root(address)
+        master_vol = root.get_node(2,1,254).get_data().as_float()
+        master_db = self.vol2db(master_vol)
+        root.get_node(2,1,254).set_data(piw.makefloat_bounded(14,-70,0,master_db,0))
+        print 'master vol',master_vol,'db',master_db
+
+        # channel volumes
+        for c in root.get_node(3).iter():
+            chan_node = c.get_node(3,1,254)
+            if chan_node:
+                chan_vol = chan_node.get_data().as_float()
+                chan_db = self.vol2db(chan_vol)
+                chan_node.set_data(piw.makefloat_bounded(14,-70,0,chan_db,0))
+                print 'channel vol',chan_vol,'db',chan_db
+                for s in c.get_node(4).iter():
+                    send_node = s.get_node(2,254)
+                    if send_node:
+                        send_vol = send_node.get_data().as_float()
+                        send_db = self.vol2db(send_vol)
+                        send_node.set_data(piw.makefloat_bounded(14,-70,0,send_db,0))
+                        print 'send vol',send_vol,'db',send_db
+
+        # fx channel volumes
+        for c in root.get_node(4).iter():
+            chan_node = c.get_node(4,1,254)
+            if chan_node:
+                chan_vol = chan_node.get_data().as_float()
+                chan_db = self.vol2db(chan_vol)
+                chan_node.set_data(piw.makefloat_bounded(14,-70,0,chan_db,0))
+                print 'fx channel vol',chan_vol,'db',chan_db
+                for s in c.get_node(5).iter():
+                    send_node = s.get_node(2,254)
+                    if send_node:
+                        send_vol = send_node.get_data().as_float()
+                        send_db = self.vol2db(send_vol)
+                        send_node.set_data(piw.makefloat_bounded(14,-70,0,send_db,0))
+                        print 'fx send vol',send_vol,'db',send_db
+
+agent.main(Agent,Upgrader)
 
 # -------------------------------------------------------------------------------------------------------------------------------------------

@@ -21,14 +21,13 @@
 import os
 import picross
 import piw
-import pkbd_native
 from pi import atom, utils, bundles, domain, agent, paths, policy, action, logic, upgrade
 from lib_pico import ezload
-from plg_pkbd import pico_manager_version as version
+from . import pico_manager_version as version,pkbd_native
 
 class VirtualKey(atom.Atom):
     def __init__(self):
-        atom.Atom.__init__(self,names='k',protocols='virtual')
+        atom.Atom.__init__(self,names='key',protocols='virtual')
         self.choices=[]
 
     def __key(self,*keys):
@@ -58,7 +57,6 @@ class Keyboard(agent.Agent):
         self.domain = piw.clockdomain_ctl()
         self.domain.set_source(piw.makestring('*',0))
 
-        self[1] = bundles.Output(1,False, names='activation output')
         self[2] = bundles.Output(2,False, names='pressure output')
         self[3] = bundles.Output(3,False, names='roll output')
         self[4] = bundles.Output(4,False, names='yaw output')
@@ -73,7 +71,7 @@ class Keyboard(agent.Agent):
         self.led_input = bundles.VectorInput(self.status_mixer.cookie(),self.domain,signals=(1,))
         self[7] = atom.Atom(names='light input',protocols='revconnect',policy=self.led_input.vector_policy(1,False,False,auto_slot=True),domain=domain.Aniso())
 
-        self.koutput = bundles.Splitter(self.domain,self[1],self[2],self[3],self[4],self[17])
+        self.koutput = bundles.Splitter(self.domain,self[2],self[3],self[4],self[17])
         self.kpoly = piw.polyctl(10,self.koutput.cookie(),False,5)
         self.soutput = bundles.Splitter(self.domain,self[5],self[8])
         self.boutput = bundles.Splitter(self.domain,self[6])
@@ -91,7 +89,7 @@ class Keyboard(agent.Agent):
         self[249] = atom.Atom(domain=domain.BoundedFloat(0,1), init=self.keyboard.get_threshold2(), protocols='input output', names='hard threshold', policy=atom.default_policy(self.keyboard.set_threshold2))
         self[240] = atom.Atom(domain=domain.BoundedFloat(0,1), init=self.keyboard.get_roll_axis_window(), protocols='input output', names='roll axis window', policy=atom.default_policy(self.keyboard.set_roll_axis_window))
         self[241] = atom.Atom(domain=domain.BoundedFloat(0,1), init=self.keyboard.get_yaw_axis_window(), protocols='input output', names='yaw axis window', policy=atom.default_policy(self.keyboard.set_yaw_axis_window))
-        self[242] = atom.Atom(domain=domain.Bool(), init=False, protocols='input output nostage', names='k logging', policy=atom.default_policy(self.keyboard.enable_key_logging))
+        self[242] = atom.Atom(domain=domain.Bool(), init=False, protocols='input output nostage explicit', names='key logging', policy=atom.default_policy(self.keyboard.enable_key_logging))
 
         f=self.keyboard.led_functor()
         self.led_backend.set_functor(piw.pathnull(0),f)
@@ -99,7 +97,7 @@ class Keyboard(agent.Agent):
         self[9] = atom.Atom(names='controller output',domain=domain.Aniso(),init=self.__controllerinit())
 
     def __controllerinit(self):
-        return utils.makedict({'courselen':self.keyboard.get_courses(),'rowlen':self.keyboard.get_courses()},0)
+        return utils.makedict({'columnlen':self.keyboard.get_columnlen(),'columnoffset':self.keyboard.get_columnoffset(),'courselen':self.keyboard.get_courselen(),'courseoffset':self.keyboard.get_courseoffset()},0)
 
     def close_server(self):
         agent.Agent.close_server(self)
@@ -142,8 +140,10 @@ class KeyboardAgent(agent.Agent):
     def download_keyboard(self,usbname):
         firmware = ezload.firmware(ezload.vendor,ezload.product)
         if firmware:
-            print 'loading firmware'
+            print 'loading firmware',firmware
             ezload.download(usbname,firmware)
+        else:
+            print "couldn't find firmware"
 
     def next_keyboard(self):
         i=0

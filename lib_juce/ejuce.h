@@ -35,6 +35,7 @@ namespace ejuce
             Application();
             ~Application();
             void initialise (const juce::String& commandLine,const pic::f_string_t &,bool ck, bool rt);
+            void cleanup();
             void shutdown();
             virtual void handleGone();
             virtual void handleWinch(const std::string &);
@@ -43,4 +44,10 @@ namespace ejuce
         private:
             impl_t *messages_;
     };
+
+    EJUCE_DECLSPEC_FUNC(juce::File) pathToFile(const std::string &path);
+    EJUCE_DECLSPEC_FUNC(juce::File) pathToFile(const char* path);
+
+    EJUCE_DECLSPEC_FUNC(juce::URL) pathToURL(const std::string &path);
+    EJUCE_DECLSPEC_FUNC(juce::URL) pathToURL(const char* path);
 };

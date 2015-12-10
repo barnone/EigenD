@@ -20,16 +20,15 @@
 
 import piw
 import picross
-import sampler2_native
 
 from pi import agent,atom,domain,bundles,resource,action,logic,utils,async,node,upgrade,const
-from plg_sampler2 import sf2
-from plg_sampler2 import sampler_oscillator_version as version
+from . import sampler_oscillator_version as version,sf2,sampler2_native
 
 from pi.logic.shortcuts import T
 import os
 import glob
 import sys
+
 response_size = 1200
 
 def render_list(list,offset,renderer):
@@ -200,7 +199,7 @@ class Sample(atom.Atom):
         return logic.render_term(())
 
     def __scan1(self,pat,f=lambda x:x):
-        g = lambda path: glob.glob(os.path.join(path,pat))
+        g = lambda path: resource.glob_glob(os.path.join(path,pat))
         paths = g(self.reldir) + g(self.userdir)
         b = lambda path: os.path.splitext(os.path.basename(path))[0]
         return map(b,paths), map(f,paths)
@@ -209,7 +208,7 @@ class Sample(atom.Atom):
         files,paths = self.__scan1('*.[sS][fF]2')
         self.__f2p = dict(zip(files,paths))
         self.__files = self.__f2p.keys()
-        names,cookies = self.__scan1('*.name', lambda p: open(p).read().strip())
+        names,cookies = self.__scan1('*.name', lambda p: resource.file_open(p).read().strip())
         self.__n2c = dict(zip(names,cookies))
         self.__c2n = dict(zip(cookies,names))
 
@@ -298,7 +297,7 @@ class Sample(atom.Atom):
 
         n = '%s.name' % n.replace(' ','_')
         path = os.path.join(self.userdir,n)
-        try: os.unlink(path)
+        try: resource.os_unlink(path)
         except: pass
 
         self.__scan()
@@ -308,9 +307,9 @@ class Sample(atom.Atom):
     def rename(self,cookie,name):
         n = '%s.name' % name.replace(' ','_')
         path = os.path.join(self.userdir,n)
-        try: os.unlink(path)
+        try: resource.os_unlink(path)
         except: pass
-        f = open(path,'w')
+        f = resource.file_open(path,'w')
         f.write(cookie)
         f.close()
         self.__update()
@@ -324,8 +323,7 @@ class Agent(agent.Agent):
         self[1] = atom.Atom(names='outputs')
         self[1][1] = bundles.Output(1,True,names="left audio output")
         self[1][10] = bundles.Output(2,True,names="right audio output")
-        self[1][2] = bundles.Output(3,False,names="activation output")
-        self[1][3] = bundles.Output(1,False,names="envelope output")
+        self[1][3] = bundles.Output(1,False,names="activation output")
         self[1][4] = bundles.Output(2,False,names="delay output")
         self[1][5] = bundles.Output(3,False,names="attack output")
         self[1][6] = bundles.Output(4,False,names="hold output")
@@ -333,27 +331,28 @@ class Agent(agent.Agent):
         self[1][8] = bundles.Output(6,False,names="sustain output")
         self[1][9] = bundles.Output(7,False,names="release output")
 
-        self.audio_output = bundles.Splitter(self.domain, self[1][1], self[1][2], self[1][10])
+        self.audio_output = bundles.Splitter(self.domain, self[1][1], self[1][10])
         self.envelope_output = bundles.Splitter(self.domain, self[1][3], self[1][4], self[1][5], self[1][6], self[1][7], self[1][8], self[1][9])
 
         self.synth_player = sampler2_native.player(self.audio_output.cookie(),self.domain)
         self.synth_loader = sampler2_native.loader(self.synth_player,self.envelope_output.cookie(),self.domain)
         self.vdetector = piw.velocitydetect(self.synth_loader.cookie(),4,3)
 
+        vel=(T('stageinc',0.1),T('inc',0.1),T('biginc',1),T('control','updown'))
         self[4] = atom.Atom(domain=domain.BoundedInt(1,1000),init=4,names="velocity sample",policy=atom.default_policy(self.__set_samples))
-        self[5] = atom.Atom(domain=domain.BoundedFloat(0.1,10),init=4,names="velocity curve",policy=atom.default_policy(self.__set_curve))
-        self[7] = atom.Atom(domain=domain.BoundedFloat(0.1,10),init=4,names="velocity scale",policy=atom.default_policy(self.__set_scale))
+        self[5] = atom.Atom(domain=domain.BoundedFloat(0.1,10,hints=vel),init=4,names="velocity curve",policy=atom.default_policy(self.__set_curve))
+        self[7] = atom.Atom(domain=domain.BoundedFloat(0.1,10,hints=vel),init=4,names="velocity scale",policy=atom.default_policy(self.__set_scale))
 
         self.loader_input = bundles.VectorInput(self.vdetector.cookie(), self.domain, signals=(1,4),threshold=5)
         self.player_input = bundles.VectorInput(self.synth_player.cookie(), self.domain, signals=(1,2,3),threshold=5)
 
         self[2] = atom.Atom(names='inputs')
         self[2][1]=atom.Atom(domain=domain.BoundedFloat(0,96000,rest=440), names='frequency input',ordinal=1,policy=self.player_input.merge_policy(1,False))
-        self[2][2]=atom.Atom(domain=domain.BoundedFloat(-1200,1200), names='detune input',policy=self.player_input.merge_policy(2,False))
+        self[2][2]=atom.Atom(domain=domain.BoundedFloat(-1200,1200,hints=(T('stageinc',1),T('inc',1),T('biginc',10),T('control','updown'))), names='detune input',policy=self.player_input.merge_policy(2,False))
         self[2][3]=atom.Atom(domain=domain.BoundedFloat(0,1), names='activation input',policy=self.player_input.vector_policy(3,False))
 
         self[2][4]=atom.Atom(domain=domain.BoundedFloat(0,1), names='pressure input',policy=self.loader_input.vector_policy(4,False))
-        self[2][5]=atom.Atom(domain=domain.BoundedFloat(-72,72), names='transpose', policy=atom.default_policy(self.__settranspose))
+        self[2][5]=atom.Atom(domain=domain.BoundedFloat(-72,72,hints=(T('stageinc',0.5),T('inc',0.5),T('biginc',12),T('control','updown'))), names='transpose', policy=atom.default_policy(self.__settranspose))
         self[2][6]=atom.Atom(domain=domain.BoundedFloat(0,96000,rest=440), names='frequency input',ordinal=2,policy=self.loader_input.merge_policy(1,False))
 
         self.__transpose = 0

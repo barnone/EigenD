@@ -24,6 +24,8 @@
 #include <piw/piw_tsd.h>
 #include <piembedded/pie_wire.h>
 #include <piembedded/pie_string.h>
+#include <piembedded/pie_iostream.h>
+#include <piembedded/pie_print.h>
 #include <picross/pic_log.h>
 #include <sstream>
 #include <limits>
@@ -150,7 +152,7 @@ static T __makewire(unsigned nb,unsigned dl, const unsigned char *dp)
 }
 
 template <class T>
-static T __pathprepend_chaff(unsigned nb,const T &o, unsigned p)
+static T __pathprepend_channel(unsigned nb,const T &o, unsigned p)
 {
     unsigned char *dp;
     const unsigned char *op;
@@ -176,7 +178,7 @@ static T __pathprepend_chaff(unsigned nb,const T &o, unsigned p)
 }
 
 template <class T>
-static T __pathprepend_grist(unsigned nb,const T &o, unsigned p)
+static T __pathprepend_event(unsigned nb,const T &o, unsigned p)
 {
     unsigned char *dp;
     const unsigned char *op;
@@ -203,7 +205,34 @@ static T __pathprepend_grist(unsigned nb,const T &o, unsigned p)
 }
 
 template <class T>
-static T __pathappend_chaff(unsigned nb,const T &o, unsigned p)
+static T __pathappend(unsigned nb,const T &o, unsigned p)
+{
+    unsigned char *dp;
+    const unsigned char *op;
+    float *vv;
+    unsigned ol,oc;
+    T d;
+
+    PIC_ASSERT(o.type()==BCTVTYPE_PATH);
+
+    ol=o.host_length();
+    op=(const unsigned char *)o.host_data();
+    oc=*op;
+
+    d=T::from_given(__allocate_host(nb,o.time(),1,0,0,BCTVTYPE_PATH,1+ol,&dp,1,&vv));
+
+    dp[0]=oc;
+    memcpy(dp+1,op+1,oc);
+    memcpy(dp+1+oc,op+1+oc,ol-1-oc);
+    dp[ol]=p;
+
+    *vv=0;
+
+    return d;
+}
+
+template <class T>
+static T __pathappend_channel(unsigned nb,const T &o, unsigned p)
 {
     unsigned char *dp;
     const unsigned char *op;
@@ -313,7 +342,7 @@ static T __pathpretruncate(unsigned nb,const T &o, unsigned l)
 }
 
 template <class T>
-static T __pathreplacegrist(unsigned nb,const T &o,unsigned g)
+static T __pathreplaceevent(unsigned nb,const T &o,unsigned g)
 {
     unsigned char *dp; float *vv;
     T d;
@@ -337,7 +366,7 @@ static T __pathreplacegrist(unsigned nb,const T &o,unsigned g)
 }
 
 template <class T>
-static T __pathgristpretruncate(unsigned nb,const T &o)
+static T __patheventpretruncate(unsigned nb,const T &o)
 {
     unsigned char *dp; float *vv;
     T d;
@@ -795,7 +824,7 @@ static T __tupledel_ex(unsigned nb, const T &old, unsigned i)
         r-=(2+vl);
     }
 
-    *vp=0;
+    *vp=old.as_norm();
     return d2;
 }
 
@@ -851,11 +880,30 @@ static T __tupleadd_ex(unsigned nb,const T &old, const T &v)
     pie_setu16(dp+l,2,v.wire_length());
     memcpy(dp+l+2,v.wire_data(),v.wire_length());
 
-    *vp=0;
+    *vp=old.as_norm();
     return d2;
 }
 
-bct_data_t piw::makecopy(unsigned nb, unsigned long long ts, bct_data_t &d)
+template <class T>
+static T __tuplenorm_ex(unsigned nb,const T &old, float norm)
+{
+    const unsigned char *b;
+    unsigned r;
+
+    b = (const unsigned char *)old.host_data();
+    r = old.host_length();
+
+    float *vp;
+    unsigned char *dp;
+    T d2 = T::from_given(__allocate_host(nb,old.time(),1,-1,0,BCTVTYPE_TUPLE,r,&dp,1,&vp));
+    memcpy(dp,b,r);
+
+    *vp = norm;
+
+    return d2;
+}
+
+bct_data_t piw::makecopy(unsigned nb, unsigned long long ts, bct_data_t d)
 {
     float *vp;
     unsigned char *dp;
@@ -879,15 +927,16 @@ piw::data_t piw::makelong_bounded_units_ex(unsigned nb,unsigned u,float ubound, 
 piw::data_t piw::makewire_ex(unsigned nb,unsigned dl, const unsigned char *dp) { return (__makewire<data_t>(nb,dl,dp)); }
 piw::data_t piw::pathnull_ex(unsigned nb,unsigned long long t) { return (__makepath<data_t>(nb,t,0,0,0)); }
 piw::data_t piw::pathone_ex(unsigned nb,unsigned v,unsigned long long t) { unsigned char vv=v; return (__makepath<data_t>(nb,t,&vv,1,0)); }
-piw::data_t piw::pathprepend_ex(unsigned nb,const data_t &d, unsigned p) { return (__pathprepend_chaff<data_t>(nb,d,p)); }
+piw::data_t piw::pathprepend_ex(unsigned nb,const data_t &d, unsigned p) { return (__pathprepend_channel<data_t>(nb,d,p)); }
 piw::data_t piw::pathtwo_ex(unsigned nb,unsigned v1,unsigned v2,unsigned long long t) { return pathprepend_ex(nb,pathone_ex(nb,v2,t),v1); }
-piw::data_t piw::pathprepend_grist_ex(unsigned nb,const data_t &d, unsigned p) { return (__pathprepend_grist<data_t>(nb,d,p)); }
-piw::data_t piw::pathappend_chaff_ex(unsigned nb,const data_t &d, unsigned p) { return (__pathappend_chaff<data_t>(nb,d,p)); }
+piw::data_t piw::pathprepend_event_ex(unsigned nb,const data_t &d, unsigned p) { return (__pathprepend_event<data_t>(nb,d,p)); }
+piw::data_t piw::pathappend_channel_ex(unsigned nb,const data_t &d, unsigned p) { return (__pathappend_channel<data_t>(nb,d,p)); }
+piw::data_t piw::pathappend_ex(unsigned nb,const data_t &d, unsigned p) { return (__pathappend<data_t>(nb,d,p)); }
 piw::data_t piw::pathtruncate_ex(unsigned nb,const data_t &d) { return (__pathtruncate<data_t>(nb,d)); }
 piw::data_t piw::pathpretruncate_ex(unsigned nb,const data_t &d) { return (__pathpretruncate<data_t>(nb,d)); }
 piw::data_t piw::pathpretruncate_ex(unsigned nb,const data_t &d,unsigned l) { return (__pathpretruncate<data_t>(nb,d,l)); }
-piw::data_t piw::pathreplacegrist_ex(unsigned nb,const data_t &d,unsigned g) { return (__pathreplacegrist<data_t>(nb,d,g)); }
-piw::data_t piw::pathgristpretruncate_ex(unsigned nb,const data_t &d) { return (__pathgristpretruncate<data_t>(nb,d)); }
+piw::data_t piw::pathreplaceevent_ex(unsigned nb,const data_t &d,unsigned g) { return (__pathreplaceevent<data_t>(nb,d,g)); }
+piw::data_t piw::patheventpretruncate_ex(unsigned nb,const data_t &d) { return (__patheventpretruncate<data_t>(nb,d)); }
 piw::data_t piw::makeblob_ex(unsigned nb,unsigned long long ts, unsigned size, unsigned char **pdata) { return __makeblob_ex<data_t>(nb,ts,size,pdata); }
 piw::data_t piw::makedouble_ex(unsigned nb,double v, unsigned long long t) { return (__makedouble<data_t>(nb,t,v)); }
 piw::data_t piw::makefloat_ex(unsigned nb,float v, unsigned long long t) { return (__makefloat<data_t>(nb,t,v)); }
@@ -906,6 +955,7 @@ piw::data_t piw::dictupdate_ex(unsigned nb,const data_t &old, const data_t &upd)
 piw::data_t piw::tuplenull_ex(unsigned nb,unsigned long long ts) { return __tuplenull_ex<data_t>(nb,ts); }
 piw::data_t piw::tupledel_ex(unsigned nb,const data_t &old, unsigned i) { return __tupledel_ex<data_t>(nb, old, i); }
 piw::data_t piw::tupleadd_ex(unsigned nb,const data_t &old, const data_t &v) { return __tupleadd_ex<data_t>(nb, old, v); }
+piw::data_t piw::tuplenorm_ex(unsigned nb,const data_t &old, float norm) { return __tuplenorm_ex<data_t>(nb, old, norm); }
 
 piw::data_nb_t piw::makearray_nb_ex(unsigned nb,unsigned long long ts, float ubound, float lbound, float rest, unsigned nfloats, float **pfloat, float **fs) { return __makearray_ex<data_nb_t>(nb,ts,ubound,lbound,rest,nfloats,pfloat,fs); }
 piw::data_nb_t piw::makenorm_nb_ex(unsigned nb,unsigned long long ts, unsigned nfloats, float **pfloat,float **fs) { return makearray_nb_ex(nb,ts,1,-1,0,nfloats,pfloat,fs); }
@@ -918,15 +968,16 @@ piw::data_nb_t piw::makelong_bounded_units_nb_ex(unsigned nb,unsigned u,float ub
 piw::data_nb_t piw::makewire_nb_ex(unsigned nb,unsigned dl, const unsigned char *dp) { return (__makewire<data_nb_t>(nb,dl,dp)); }
 piw::data_nb_t piw::pathnull_nb_ex(unsigned nb,unsigned long long t) { return (__makepath<data_nb_t>(nb,t,0,0,0)); }
 piw::data_nb_t piw::pathone_nb_ex(unsigned nb,unsigned v,unsigned long long t) { unsigned char vv=v; return (__makepath<data_nb_t>(nb,t,&vv,1,0)); }
-piw::data_nb_t piw::pathprepend_nb_ex(unsigned nb,const data_nb_t &d, unsigned p) { return (__pathprepend_chaff<data_nb_t>(nb,d,p)); }
+piw::data_nb_t piw::pathprepend_nb_ex(unsigned nb,const data_nb_t &d, unsigned p) { return (__pathprepend_channel<data_nb_t>(nb,d,p)); }
 piw::data_nb_t piw::pathtwo_nb_ex(unsigned nb,unsigned v1,unsigned v2,unsigned long long t) { return pathprepend_nb_ex(nb,pathone_nb_ex(nb,v2,t),v1); }
-piw::data_nb_t piw::pathprepend_grist_nb_ex(unsigned nb,const data_nb_t &d, unsigned p) { return (__pathprepend_grist<data_nb_t>(nb,d,p)); }
-piw::data_nb_t piw::pathappend_chaff_nb_ex(unsigned nb,const data_nb_t &d, unsigned p) { return (__pathappend_chaff<data_nb_t>(nb,d,p)); }
+piw::data_nb_t piw::pathprepend_event_nb_ex(unsigned nb,const data_nb_t &d, unsigned p) { return (__pathprepend_event<data_nb_t>(nb,d,p)); }
+piw::data_nb_t piw::pathappend_channel_nb_ex(unsigned nb,const data_nb_t &d, unsigned p) { return (__pathappend_channel<data_nb_t>(nb,d,p)); }
+piw::data_nb_t piw::pathappend_nb_ex(unsigned nb,const data_nb_t &d, unsigned p) { return (__pathappend<data_nb_t>(nb,d,p)); }
 piw::data_nb_t piw::pathtruncate_nb_ex(unsigned nb,const data_nb_t &d) { return (__pathtruncate<data_nb_t>(nb,d)); }
 piw::data_nb_t piw::pathpretruncate_nb_ex(unsigned nb,const data_nb_t &d) { return (__pathpretruncate<data_nb_t>(nb,d)); }
 piw::data_nb_t piw::pathpretruncate_nb_ex(unsigned nb,const data_nb_t &d,unsigned l) { return (__pathpretruncate<data_nb_t>(nb,d,l)); }
-piw::data_nb_t piw::pathreplacegrist_nb_ex(unsigned nb,const data_nb_t &d,unsigned g) { return (__pathreplacegrist<data_nb_t>(nb,d,g)); }
-piw::data_nb_t piw::pathgristpretruncate_nb_ex(unsigned nb,const data_nb_t &d) { return (__pathgristpretruncate<data_nb_t>(nb,d)); }
+piw::data_nb_t piw::pathreplaceevent_nb_ex(unsigned nb,const data_nb_t &d,unsigned g) { return (__pathreplaceevent<data_nb_t>(nb,d,g)); }
+piw::data_nb_t piw::patheventpretruncate_nb_ex(unsigned nb,const data_nb_t &d) { return (__patheventpretruncate<data_nb_t>(nb,d)); }
 piw::data_nb_t piw::makeblob_nb_ex(unsigned nb,unsigned long long ts, unsigned size, unsigned char **pdata) { return __makeblob_ex<data_nb_t>(nb,ts,size,pdata); }
 piw::data_nb_t piw::makedouble_nb_ex(unsigned nb,double v, unsigned long long t) { return (__makedouble<data_nb_t>(nb,t,v)); }
 piw::data_nb_t piw::makefloat_nb_ex(unsigned nb,float v, unsigned long long t) { return (__makefloat<data_nb_t>(nb,t,v)); }
@@ -945,6 +996,7 @@ piw::data_nb_t piw::dictupdate_nb_ex(unsigned nb,const data_nb_t &old, const dat
 piw::data_nb_t piw::tuplenull_nb_ex(unsigned nb,unsigned long long ts) { return __tuplenull_ex<data_nb_t>(nb,ts); }
 piw::data_nb_t piw::tupledel_nb_ex(unsigned nb,const data_nb_t &old, unsigned i) { return __tupledel_ex<data_nb_t>(nb, old, i); }
 piw::data_nb_t piw::tupleadd_nb_ex(unsigned nb,const data_nb_t &old, const data_nb_t &v) { return __tupleadd_ex<data_nb_t>(nb, old, v); }
+piw::data_nb_t piw::tuplenorm_nb_ex(unsigned nb,const data_nb_t &old, float norm) { return __tuplenorm_ex<data_nb_t>(nb, old, norm); }
 
 /*
  * piw::data_base_t
@@ -968,14 +1020,14 @@ bct_data_t piw::data_base_t::give_copy(unsigned nb) const
     return d;
 }
 
-int piw::data_base_t::compare_grist(const data_base_t &other) const
+int piw::data_base_t::compare_event(const data_base_t &other) const
 {
     if(!is_path() || !other.is_path()) return -1;
 
     unsigned al=as_pathlen();
     unsigned bl=other.as_pathlen();
-    unsigned ac=as_pathchafflen();
-    unsigned bc=other.as_pathchafflen();
+    unsigned ac=as_pathchannellen();
+    unsigned bc=other.as_pathchannellen();
     unsigned ag=al-ac;
     unsigned bg=bl-bc;
 
@@ -1200,19 +1252,19 @@ unsigned piw::data_base_t::as_tuplelen() const
     return c;
 }
 
-std::ostream &operator<<(std::ostream &o, const piw::data_base_t &d)
+std::ostream &piw::operator<<(std::ostream &o, const piw::data_base_t &d)
 {
     pie_print(d.wire_length(),d.wire_data(), pie::ostreamwriter, &o);
     return o;
 }
 
-std::ostream &operator<<(std::ostream &o, const piw::fullprinter_t<piw::data_t> &d)
+std::ostream &piw::operator<<(std::ostream &o, const piw::fullprinter_t<piw::data_t> &d)
 {
     pie_printfull(d.data_.wire_length(),d.data_.wire_data(), pie::ostreamwriter, &o);
     return o;
 }
 
-std::ostream &operator<<(std::ostream &o, const piw::fullprinter_t<piw::data_nb_t> &d)
+std::ostream &piw::operator<<(std::ostream &o, const piw::fullprinter_t<piw::data_nb_t> &d)
 {
     pie_printfull(d.data_.wire_length(),d.data_.wire_data(), pie::ostreamwriter, &o);
     return o;
@@ -1735,8 +1787,8 @@ int piw::dataholder_nb_t::assignment__(void *self_, void *arg_)
 
     if(self->data_!=d)
     {
-        self->clear();
-        self->data_=d;
+        self->clear_nb();
+        self->data_ = d;
         piw_data_incref_fast(self->data_);
     }
 
@@ -1747,7 +1799,7 @@ int piw::dataholder_nb_t::clear__(void *self_, void *arg_)
 {
     piw::dataholder_nb_t *self = (piw::dataholder_nb_t *)self_;
 
-    self->clear();
+    self->clear_nb();
 
     return 1;
 }
@@ -1767,14 +1819,18 @@ void piw::dataholder_nb_t::set_normal(const piw::data_t &d)
     piw::tsd_fastcall(set_normal__,this,(void *)d.give_copy(PIC_ALLOC_NB));
 }
 
+void piw::dataholder_nb_t::clear()
+{
+    piw::tsd_fastcall(clear__,this,(void *)0);
+}
+
 void piw::dataholder_nb_t::set_nb(const piw::data_nb_t &d)
 {
-    clear();
-
+    clear_nb();
     data_ = d.give();
 }
 
-void piw::dataholder_nb_t::clear()
+void piw::dataholder_nb_t::clear_nb()
 {
     if(data_)
     {
@@ -1805,7 +1861,7 @@ piw::dataholder_nb_t::operator piw::data_nb_t() const
     return get();
 }
 
-std::ostream &operator<<(std::ostream &o, const piw::dataholder_nb_t &d)
+std::ostream &piw::operator<<(std::ostream &o, const piw::dataholder_nb_t &d)
 {
     pie_print(d.get().wire_length(),d.get().wire_data(), pie::ostreamwriter, &o);
     return o;

@@ -64,6 +64,18 @@ namespace
         xctl->control_init();
         return 0;
     }
+
+    static bool compare_phys_key(const piw::data_nb_t &k1, const piw::data_nb_t &k2)
+    {
+        float k1c,k1r;
+        float k2c,k2r;
+
+        if(!piw::decode_key(k1,&k1c,&k1r)) return false;
+        if(!piw::decode_key(k2,&k2c,&k2r)) return false;
+        if(k1c!=k2c) return false;
+        if(k1r!=k2r) return false;
+        return true;
+    }
 }
 
 struct piw::controller_t::ctlsignal_t: piw::wire_ctl_t, piw::event_data_source_real_t
@@ -107,10 +119,10 @@ struct piw::controller_t::ctlsignal_t: piw::wire_ctl_t, piw::event_data_source_r
             if(!state_)
             {
                 {
-                    pic::flipflop_t<piw::data_t>::guard_t gk(key_);
-                    if(gk.value().is_tuple())
+                    pic::flipflop_t<piw::coordinate_t>::guard_t gk(key_);
+                    if(gk.value().is_valid())
                     {
-                        buffer_.add_value(2,gk.value().make_nb().restamp(t));
+                        buffer_.add_value(2,gk.value().make_data_nb(t));
                     }
                 }
                 source_start(0,piw::pathone_nb(id_,t),buffer_);
@@ -147,7 +159,7 @@ struct piw::controller_t::ctlsignal_t: piw::wire_ctl_t, piw::event_data_source_r
     }
 
 
-    void set_key(const piw::data_t &key)
+    void set_key(const piw::coordinate_t &key)
     {
         key_.set(key);
         piw::tsd_fastcall(reset0__,this,0);
@@ -156,7 +168,7 @@ struct piw::controller_t::ctlsignal_t: piw::wire_ctl_t, piw::event_data_source_r
     unsigned id_;
     piw::xxcontrolled_t *client_;
     unsigned state_,savestate_;
-    pic::flipflop_t<piw::data_t> key_;
+    pic::flipflop_t<piw::coordinate_t> key_;
     piw::xevent_data_buffer_t buffer_;
 };
 
@@ -206,33 +218,16 @@ struct piw::controller_t::impl_t: piw::ufilterctl_t, piw::root_ctl_t
     {
         ctlset.clear();
 
-        if(!key.is_tuple() || key.as_tuplelen() != 4) return;
+        float kc = 0;
+        float kr = 0;
 
-        int kn = key.as_tuple_value(0).as_long();
-        piw::data_nb_t coord = key.as_tuple_value(1);
+        if(!piw::decode_key(key,&kc,&kr)) return;
+        if(kc==0 && kr==0) { return; }
 
-        if(!coord.is_tuple() || coord.as_tuplelen() !=2 || !coord.as_tuple_value(0).is_float() || !coord.as_tuple_value(1).is_float()) return;
-
-        int kr = coord.as_tuple_value(0).as_float();
-        int kc = coord.as_tuple_value(1).as_float();
-
-        if(kr==0 && kc==0)
-        {
-            return;
-        }
-
-        piw::data_nb_t rowlen;
-        int nr = 0;
-
+        piw::data_nb_t columnlen;
         if(ctl.is_dict())
         {
-            piw::data_nb_t t=ctl.as_dict_lookup("rowlen");
-
-            if(t.is_tuple() && t.as_tuplelen()>0)
-            {
-                rowlen=t;
-                nr = t.as_tuplelen();
-            }
+            columnlen = ctl.as_dict_lookup("columnlen");
         }
 
         pic::flipflop_t<std::vector<ctlsignal_t *> >::guard_t lg(controllist_);
@@ -246,46 +241,18 @@ struct piw::controller_t::impl_t: piw::ufilterctl_t, piw::root_ctl_t
                 continue;
             }
 
-            pic::flipflop_t<piw::data_t>::guard_t g((*li)->key_);
+            pic::flipflop_t<piw::coordinate_t>::guard_t g((*li)->key_);
 
-            if(!g.value().is_tuple())
+            if(!g.value().is_valid())
             {
                 continue;
             }
 
-            int r = g.value().as_tuple_value(0).as_long();
-            int c = g.value().as_tuple_value(1).as_long();
-
-            if(r==0)
+            piw::coordinate_t key = g.value();
+            if(key.equals(kc,kr,columnlen))
             {
-                if(c==kn)
-                {
-                    ctlset.insert((*li)->client_);
-                    continue;
-                }
+                ctlset.insert((*li)->client_);
             }
-
-            if(r<0)
-            {
-                if(!nr) continue;
-                r = r+nr+1;
-                if(r<=0 || r>nr) continue;
-            }
-
-            if(r!=kr) continue;
-
-            if(c<0)
-            {
-                if(!nr) continue;
-                if(r<=0 || r>nr) continue;
-                int nc = rowlen.as_tuple_value(r-1).as_long();
-                c = c+nc+1;
-                if(c<=0 || c>nc) continue;
-            }
-
-            if(c!=kc) continue;
-
-            ctlset.insert((*li)->client_);
         }
 
     }
@@ -321,9 +288,9 @@ struct piw::controller_t::impl_t: piw::ufilterctl_t, piw::root_ctl_t
         }
     }
 
-    void set_key(unsigned index, const piw::data_t &key)
+    void set_key(unsigned index, const piw::coordinate_t &key)
     {
-        if(!key.is_tuple() || key.as_tuplelen() != 2) return;
+        if(!key.is_valid()) return;
 
         pic::flipflop_t<std::vector<ctlsignal_t *> >::guard_t gc(controllist_);
 
@@ -455,7 +422,7 @@ void ctlfilter_t::ufilterfunc_end(piw::ufilterenv_t *env, unsigned long long t)
     if(!id_.is_empty())
     {
         end__(t);
-        id_.clear();
+        id_.clear_nb();
     }
 }
 
@@ -464,6 +431,7 @@ void ctlfilter_t::start__(unsigned long long t)
     controller_->get_controlled(controlled_,current_key_.get(),current_ctl_.get());
 
     ctlset_t::const_iterator it;
+
     for(it=controlled_.begin(); it!=controlled_.end(); ++it)
     {
         (*it)->control_start(t);
@@ -495,7 +463,7 @@ void ctlfilter_t::ufilterfunc_data(piw::ufilterenv_t *env,unsigned s,const piw::
 
         if(s==1)
         {
-            if(d.compare(current_key_.get(),false)!=0)
+            if(!compare_phys_key(d,current_key_.get()))
             {
                 current_key_.set_nb(d);
                 changed=true;
@@ -542,14 +510,15 @@ piw::xxcontrolled_t::xxcontrolled_t() : controller_(0), xximpl_(new impl_t())
 
 piw::xxcontrolled_t::~xxcontrolled_t()
 {
+    detach();
     piw::tsd_fastcall(__destruct,this,0);
+    delete xximpl_;
 }
 
 int piw::xxcontrolled_t::__destruct(void *self_, void *)
 {
     xxcontrolled_t *self = (xxcontrolled_t *)self_;
-    delete self->xximpl_;
-
+    self->end_event(piw::tsd_time());
     return 1;
 } 
 
@@ -631,7 +600,7 @@ piw::change_nb_t piw::xxcontrolled_t::sender()
     return xximpl_->sender();
 }
 
-void piw::xxcontrolled_t::set_key(const piw::data_t &key)
+void piw::xxcontrolled_t::set_key(const piw::coordinate_t &key)
 {
     if(controller_)
         controller_->impl_->set_key(index_,key);
@@ -707,7 +676,9 @@ int piw::controlled_t::__disable_direct(void *c_, void *_)
 
 void piw::controlled_t::control_receive(unsigned s,const piw::data_nb_t &value)
 {
-    if(s!=1) return;
+    piw::hardness_t h;
+
+    if(s!=1 || !piw::decode_key(value,0,0,0,0,&h) || h==piw::KEY_LIGHT) return;
 
     if(enabled_)
         disable();
@@ -733,7 +704,7 @@ void piw::controlled_t::disable()
     }
 }
 
-piw::fasttrigger_t::fasttrigger_t(unsigned color): color_(color), active_(0)
+piw::fasttrigger_t::fasttrigger_t(unsigned color): color_(color), active_(0), event_(false)
 {
 }
 
@@ -759,36 +730,43 @@ int piw::fasttrigger_t::__ping_direct(void *c_, void *v_)
     pic::logmsg() << "trigger fired " << t;
     c->send(piw::makebool_nb(true,t));
     c->control_start(t);
+    if(!c->event_)
+    {
+        c->event_ = true;
+        c->start_event(t);
+    }
     c->send(piw::makebool_nb(false,t+1));
     c->control_term(t+2);
+
     return 0;
 }
 
 void piw::fasttrigger_t::control_start(unsigned long long t)
 {
-    if(active_++==0)
-    {
-        start_event(t);
-    }
+    active_++;
 }
 
 void piw::fasttrigger_t::control_term(unsigned long long t)
 {
     if(active_>0)
     {
-        if(--active_==0)
+        if(--active_==0 && event_)
         {
             end_event(t);
+            event_ = false;
         }
     }
 }
 
 void piw::fasttrigger_t::control_receive(unsigned s,const piw::data_nb_t &value)
 {
-    if(s!=1) return;
+    piw::hardness_t h;
 
-    unsigned long long t = value.time();
-    tsd_fastcall(__ping_direct,this,&t);
+    if(s==1 && piw::decode_key(value,0,0,0,0,&h) && h!=piw::KEY_LIGHT)
+    {
+        unsigned long long t = value.time();
+        __ping_direct(this,&t);
+    }
 }
 
 void piw::fasttrigger_t::trigger__(const piw::data_t &d)
